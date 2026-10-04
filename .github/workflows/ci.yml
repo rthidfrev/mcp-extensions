@@ -12,9 +12,48 @@ jobs:
   checks:
     uses: ./.github/workflows/checks.yml
 
+  rust:
+    name: Rust (${{ matrix.os }}, ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: stable
+          - os: ubuntu-latest
+            toolchain: "1.88.0"
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo +${{ matrix.toolchain }} fmt --check
+      - name: Lint
+        run: cargo +${{ matrix.toolchain }} clippy --locked --all-targets --all-features -- -D warnings
+      - name: Tests and documentation examples
+        run: cargo +${{ matrix.toolchain }} test --locked --all-features
+      - name: Minimal library build
+        run: cargo +${{ matrix.toolchain }} check --locked --lib --no-default-features
+      - name: Documentation
+        run: cargo +${{ matrix.toolchain }} doc --locked --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Verify crate archive
+        run: cargo +${{ matrix.toolchain }} package --locked --allow-dirty
+
   # Keep the required status name used by the repository's branch rules.
   check:
-    needs: checks
+    needs: [checks, rust]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 1
@@ -22,7 +61,8 @@ jobs:
       - name: Require successful checks
         env:
           RESULT: ${{ needs.checks.result }}
-        run: test "$RESULT" = success
+          RUST_RESULT: ${{ needs.rust.result }}
+        run: test "$RESULT" = success && test "$RUST_RESULT" = success
 
   publish-marketplace:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
