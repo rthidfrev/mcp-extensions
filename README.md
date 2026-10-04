@@ -51,6 +51,7 @@ Follow the SDK installation instructions for the current source:
 
 - [TypeScript](typescript/README.md#installation): `@openai/mcp-extensions` for MCP servers and Apps.
 - [Python](python/README.md#installation): `openai-mcp-extensions` for MCP servers.
+- [Rust](rust/README.md#installation): `openai-mcp-extensions` for MCP servers built with `rmcp`.
 
 ### 3. Explore supported extensions
 

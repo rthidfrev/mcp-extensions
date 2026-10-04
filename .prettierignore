@@ -6,6 +6,8 @@ __pycache__/
 dist/
 build/
 .local/
+rust/target/
+rust/Cargo.lock
 pnpm-lock.yaml
 python/uv.lock
 

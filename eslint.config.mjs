@@ -9,6 +9,7 @@ export default tseslint.config(
       "**/coverage/**",
       "**/dist/**",
       "**/node_modules/**",
+      "rust/target/**",
     ],
   },
   eslint.configs.recommended,
