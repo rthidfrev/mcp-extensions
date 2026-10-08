@@ -8,6 +8,12 @@ The alpha's manual client qualification covers ChatGPT Desktop only.
 See [the custom server example](examples/custom_server.rs) and the public API
 documentation in [the crate source](src/lib.rs).
 
+Typed forms and settings describe flat Rust models using `Model` and `ModelField`.
+Required fields use concrete types; omitted `Option` fields remain optional and
+explicit nulls are rejected. Numeric decoding preserves integer domains and
+rechecks floating-point constraints after rounding. See the
+[handwritten typed server](examples/typed.rs) and [model API](src/model.rs).
+
 Server-side [OpenAI MCP Extensions](../docs/spec.md) for the
 [official Rust MCP SDK, `rmcp`](https://github.com/modelcontextprotocol/rust-sdk).
 The crate adds mention search, native settings, MCP App metadata, resource input

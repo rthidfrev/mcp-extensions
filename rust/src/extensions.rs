@@ -1,7 +1,9 @@
 use crate::{
     Error,
     mentions::{self, MentionSearchParams, MentionSearchResult, SEARCH_MENTIONS_TOOL},
-    settings::{SettingsCapability, SettingsRegistration, SettingsTools},
+    settings::{
+        SettingsCapability, SettingsModel, SettingsRegistration, SettingsTools, TypedSettings,
+    },
 };
 use rmcp::{
     ErrorData, RoleServer,
@@ -131,6 +133,52 @@ impl OpenAIExtensions {
                 JsonObject,
                 RequestContext<RoleServer>,
             ) -> ExtensionFuture<'a, JsonObject>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.install_settings_tools(router, registration.into_tools_with_state(read, update))
+    }
+
+    /// Install typed settings using the same routes and atomic name preflight as
+    /// raw settings. Callbacks own authorization and persistence; incomplete or
+    /// invalid returned values are internal errors after application effects.
+    pub fn register_typed_settings<S, V, R, U, RFut, UFut>(
+        &mut self,
+        router: &mut ToolRouter<S>,
+        registration: TypedSettings<V>,
+        read: R,
+        update: U,
+    ) -> Result<(), Error>
+    where
+        S: Send + Sync + 'static,
+        V: SettingsModel,
+        R: Fn(RequestContext<RoleServer>) -> RFut + Send + Sync + 'static,
+        U: Fn(V::Patch, RequestContext<RoleServer>) -> UFut + Send + Sync + 'static,
+        RFut: Future<Output = Result<V, ErrorData>> + Send + 'static,
+        UFut: Future<Output = Result<V, ErrorData>> + Send + 'static,
+    {
+        self.install_settings_tools(router, registration.into_tools(read, update))
+    }
+
+    /// Install typed settings whose callbacks borrow the original server across
+    /// await. Return `Box::pin(async move { ... })`; validation, collision checks
+    /// and capability advertisement match [`Self::register_typed_settings`].
+    pub fn register_typed_settings_with_state<S, V, R, U>(
+        &mut self,
+        router: &mut ToolRouter<S>,
+        registration: TypedSettings<V>,
+        read: R,
+        update: U,
+    ) -> Result<(), Error>
+    where
+        S: Send + Sync + 'static,
+        V: SettingsModel,
+        R: for<'a> Fn(&'a S, RequestContext<RoleServer>) -> ExtensionFuture<'a, V>
+            + Send
+            + Sync
+            + 'static,
+        U: for<'a> Fn(&'a S, V::Patch, RequestContext<RoleServer>) -> ExtensionFuture<'a, V>
             + Send
             + Sync
             + 'static,

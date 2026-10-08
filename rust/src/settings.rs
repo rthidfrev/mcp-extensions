@@ -13,8 +13,10 @@ use crate::{
 
 mod convenience;
 mod tools;
+mod typed;
 mod wire;
 pub use tools::SettingsTools;
+pub use typed::{SettingsModel, TypedSettings};
 
 /// Capability key identifying a same-server settings read/update pair.
 pub const SETTINGS_CAPABILITY_KEY: &str = "openai/settings";

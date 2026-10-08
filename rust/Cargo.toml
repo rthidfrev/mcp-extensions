@@ -40,6 +40,10 @@ name = "custom_server"
 test = true
 
 [[example]]
+name = "typed"
+test = true
+
+[[example]]
 name = "mcp_app"
 required-features = ["mcp-apps"]
 

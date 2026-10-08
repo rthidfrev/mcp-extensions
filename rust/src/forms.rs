@@ -15,6 +15,8 @@ mod wire;
 pub(crate) use schema::validate_resource_selection;
 use schema::{validate_field, validate_uri};
 pub mod mrtr;
+mod typed;
+pub use typed::{TypedForm, TypedFormInput, TypedFormResult};
 
 use crate::{
     Error,
