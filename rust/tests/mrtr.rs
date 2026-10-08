@@ -394,3 +394,166 @@ fn multiple_form_keys_and_result_metadata_are_lossless() {
     ));
     assert!(read_input(&params, "missing", &form).is_err());
 }
+
+#[derive(Default)]
+struct PipelineEffects {
+    callbacks: AtomicUsize,
+    diagnostics: Mutex<Vec<(Value, bool)>>,
+}
+
+struct Pipeline {
+    inner: Inner,
+    effects: Arc<PipelineEffects>,
+}
+
+impl rmcp::Service<RoleServer> for Pipeline {
+    async fn handle_request(
+        &self,
+        request: rmcp::model::ClientRequest,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ServerResult, ErrorData> {
+        let id = json!(context.id);
+        let result = async {
+            // A synthetic consumer policy for this fixture, not an SDK policy.
+            if context.meta.get("example/deny") == Some(&json!(true)) {
+                return Err(ErrorData::invalid_request("consumer denied request", None));
+            }
+            if let rmcp::model::ClientRequest::CallToolRequest(call) = &request
+                && call.params.name == "form"
+                && forms::mrtr::is_mrtr_request(&call.params, &context)?
+            {
+                let expected_id = &id;
+                return forms::mrtr::handle_tool_call(
+                    call.params.clone(),
+                    context,
+                    &ServerHandler::get_info(&self.inner).server_info,
+                    &ServerHandler::supported_protocol_versions(&self.inner),
+                    |params, context| async move {
+                        self.effects.callbacks.fetch_add(1, Ordering::SeqCst);
+                        assert_eq!(json!(context.id), *expected_id);
+                        assert_eq!(
+                            context.meta["test/keep"],
+                            json!({"trace":"original context"})
+                        );
+                        assert!(!context.ct.is_cancelled());
+                        if params
+                            .arguments
+                            .as_ref()
+                            .is_some_and(|arguments| arguments.contains_key("fail"))
+                        {
+                            return Err(ErrorData::internal_error(
+                                "consumer callback failed",
+                                None,
+                            ));
+                        }
+                        match read_input(&params, "answer", &self.inner.form)
+                            .map_err(ErrorData::from)?
+                        {
+                            FormInput::Initial => Ok(FormInputRequired::new(
+                                "pipeline-state",
+                                "answer",
+                                "Choose a color",
+                                &self.inner.form,
+                            )
+                            .unwrap()
+                            .into()),
+                            FormInput::Response {
+                                request_state,
+                                result,
+                            } => {
+                                assert_eq!(request_state, "pipeline-state");
+                                Ok(CallToolResult::structured(json!(result)).into())
+                            }
+                        }
+                    },
+                )
+                .await;
+            }
+            rmcp::Service::handle_request(&self.inner, request, context).await
+        }
+        .await;
+        self.effects
+            .diagnostics
+            .lock()
+            .unwrap()
+            .push((id, result.is_ok()));
+        result
+    }
+    async fn handle_notification(
+        &self,
+        notification: rmcp::model::ClientNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> Result<(), ErrorData> {
+        rmcp::Service::handle_notification(&self.inner, notification, context).await
+    }
+    fn get_info(&self) -> ServerConfig {
+        ServerHandler::get_info(&self.inner)
+    }
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        ServerHandler::supported_protocol_versions(&self.inner)
+    }
+}
+
+#[tokio::test]
+async fn consumer_pipeline_keeps_checks_context_and_error_diagnostics_for_forms() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for modern in [false, true] {
+            let effects = Arc::new(PipelineEffects::default());
+            let (server_io, client_io) = tokio::io::duplex(65536);
+            let task = tokio::spawn(Pipeline {
+                inner: Inner { form: Arc::new(form()), notifications: Default::default() },
+                effects: effects.clone(),
+            }.serve(server_io));
+            let mut rpc = Rpc::new(client_io);
+            if modern { rpc.modern(1, "server/discover", json!({})).await; }
+            else {
+                rpc.request(1,"initialize",json!({"protocolVersion":"2025-11-25","capabilities":{"extensions":{"openai/elicitation":{"form":{}}}},"clientInfo":{"name":"legacy-host","version":"1"}})).await;
+                rpc.send(json!({"jsonrpc":"2.0","method":"notifications/initialized"})).await;
+            }
+            let server = task.await.unwrap().unwrap();
+            let mut denied_meta = if modern { meta() } else { json!({}) };
+            denied_meta["example/deny"] = json!(true);
+            let denied = rpc.request(2, "tools/call", json!({"name":"form","_meta":denied_meta})).await;
+            assert!(denied.get("error").is_some());
+            assert_eq!(effects.callbacks.load(Ordering::SeqCst), 0);
+            assert!(rpc.legacy_requests.is_empty());
+
+            if modern {
+                let initial = rpc.modern(3, "tools/call", json!({"name":"form"})).await;
+                assert_eq!(initial["result"]["resultType"], "input_required");
+                let mut denied = continuation(&json!("pipeline-state"), json!({"action":"accept","content":{"selection":"blue"}}));
+                denied["_meta"] = denied_meta;
+                assert!(rpc.request(4, "tools/call", denied).await.get("error").is_some());
+                assert_eq!(effects.callbacks.load(Ordering::SeqCst), 1);
+                let mut missing = meta();
+                missing["io.modelcontextprotocol/clientCapabilities"] = json!({});
+                assert!(rpc.request(5,"tools/call",json!({"name":"form","_meta":missing})).await.get("error").is_some());
+                assert_eq!(effects.callbacks.load(Ordering::SeqCst), 1);
+                let failure = rpc.modern(6, "tools/call", json!({"name":"form","arguments":{"fail":true}})).await;
+                assert_eq!(failure["error"]["code"], -32603);
+                let invalid = rpc.modern(7,"tools/call",continuation(&json!("pipeline-state"),json!({"action":"accept","content":{"selection":"unknown"}}))).await;
+                assert!(invalid.get("error").is_some());
+                let complete = rpc.modern(8,"tools/call",continuation(&json!("pipeline-state"),json!({"action":"decline"}))).await;
+                assert_eq!(complete["result"]["structuredContent"]["action"], "decline");
+                assert_eq!(effects.callbacks.load(Ordering::SeqCst), 4);
+                assert!(rpc.legacy_requests.is_empty());
+                assert_eq!(*effects.diagnostics.lock().unwrap(), vec![
+                    (json!(1), true), (json!(2), false), (json!(3), true), (json!(4), false),
+                    (json!(5), false), (json!(6), false), (json!(7), false), (json!(8), true),
+                ]);
+            } else {
+                rpc.legacy_answer = Some(json!({"action":"decline"}));
+                let complete = rpc.request(3, "tools/call", json!({"name":"form"})).await;
+                assert_eq!(complete["result"]["structuredContent"]["action"], "decline");
+                let invalid = rpc.request(4, "tools/call", continuation(&json!("pipeline-state"),json!({"action":"cancel"}))).await;
+                assert!(invalid.get("error").is_some());
+                assert_eq!(rpc.legacy_requests.len(), 1);
+                assert_eq!(effects.callbacks.load(Ordering::SeqCst), 0);
+                assert_eq!(*effects.diagnostics.lock().unwrap(), vec![
+                    (json!(1), true), (json!(2), false), (json!(3), true), (json!(4), false),
+                ]);
+            }
+            server.cancel().await.unwrap();
+        }
+    }).await.unwrap();
+}

@@ -1,5 +1,13 @@
 # OpenAI MCP Extensions for Rust
 
+Standalone mention/settings routes can be installed in a custom dispatcher or
+registered on `ToolRouter`; callbacks retain the original request context.
+Generic MCP Apps helpers require the optional `mcp-apps` feature, backed by
+`mcp-apps-server =0.1.0-alpha.1`. No optional features are enabled by default.
+The alpha's manual client qualification covers ChatGPT Desktop only.
+See [the custom server example](examples/custom_server.rs) and the public API
+documentation in [the crate source](src/lib.rs).
+
 Server-side [OpenAI MCP Extensions](../docs/spec.md) for the
 [official Rust MCP SDK, `rmcp`](https://github.com/modelcontextprotocol/rust-sdk).
 The crate adds mention search, native settings, MCP App metadata, resource input
@@ -288,7 +296,7 @@ Actual deployment through the OpenAI server registry has not been exercised.
 From the repository root:
 
 ```sh
-cargo run --manifest-path rust/Cargo.toml --example server
+cargo run --manifest-path rust/Cargo.toml --example server --features mcp-apps
 ```
 
 [The stdio example](examples/server.rs) exposes `search_mentions`, native settings,

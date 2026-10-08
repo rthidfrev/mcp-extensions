@@ -375,3 +375,57 @@ fn collisions_do_not_overwrite_routes_or_half_register_settings() {
     assert!(caps.extensions.is_none());
     assert!(!forms::supports_forms(&ClientCapabilities::default()));
 }
+
+#[test]
+fn disabled_names_are_reserved_without_partial_installation_or_notifications() {
+    for name in ["search_mentions", "settings.read", "settings.update"] {
+        for registered in [false, true] {
+            let mut router: ToolRouter<()> = ToolRouter::new();
+            if registered {
+                router.add_route(ToolRoute::new_dyn(
+                    Tool::new(name, "Keep this tool", rmcp::model::JsonObject::new()),
+                    |_| Box::pin(async { unreachable!() }),
+                ));
+            }
+            router.disable_route(name);
+            let notices = Arc::new(AtomicUsize::new(0));
+            let observed = notices.clone();
+            router.set_notifier(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+            });
+            let mut extensions = OpenAIExtensions::new();
+            let result = if name == "search_mentions" {
+                extensions.register_mentions(&mut router, |_, _| async {
+                    Ok(MentionSearchResult::default())
+                })
+            } else {
+                extensions.register_settings(
+                    &mut router,
+                    SettingsRegistration::new(json!({"type":"object","properties":{}})).unwrap(),
+                    |_| async { Ok(Default::default()) },
+                    |_, _| async { Ok(Default::default()) },
+                )
+            };
+            assert!(matches!(result, Err(Error::ToolCollision(ref actual)) if actual == name));
+            assert_eq!(router.map.len(), usize::from(registered));
+            if registered {
+                assert_eq!(
+                    router.map[name].attr.description.as_deref(),
+                    Some("Keep this tool")
+                );
+                assert!(router.is_disabled(name));
+            }
+            assert!(router.list_all().is_empty());
+            assert_eq!(notices.load(Ordering::SeqCst), 0);
+            let mut capabilities = rmcp::model::ServerCapabilities::default();
+            extensions.apply_capabilities(&mut capabilities);
+            assert!(capabilities.tools.is_none());
+            assert!(capabilities.extensions.is_none());
+            assert!(capabilities.experimental.is_none());
+            assert!(
+                router.enable_route(name),
+                "the reserved disabled marker must survive"
+            );
+        }
+    }
+}

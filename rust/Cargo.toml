@@ -9,14 +9,19 @@ repository = "https://github.com/openai/mcp-extensions"
 readme = "README.md"
 include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE", "Cargo.toml"]
 
+[features]
+default = []
+mcp-apps = ["dep:mcp-apps-server"]
+
 [dependencies]
+mcp-apps-server = { version = "=0.1.0-alpha.1", optional = true, default-features = false, features = ["server"] }
 rmcp = { version = "3.5.0", default-features = false, features = ["server"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 jsonschema = { version = "0.58.5", default-features = false }
 base64 = "0.22"
-fluent-uri = "0.4.1"
+fluent-uri = { version = "0.4.1", default-features = false, features = ["alloc", "impl-error"] }
 
 [dev-dependencies]
 rmcp = { version = "3.5.0", default-features = false, features = ["client", "macros", "transport-io"] }
@@ -27,4 +32,20 @@ unsafe_code = "forbid"
 
 [[example]]
 name = "server"
+required-features = ["mcp-apps"]
 test = true
+
+[[example]]
+name = "custom_server"
+test = true
+
+[[example]]
+name = "mcp_app"
+required-features = ["mcp-apps"]
+
+[[example]]
+name = "rmcp_app"
+
+[[test]]
+name = "mcp_apps"
+required-features = ["mcp-apps"]

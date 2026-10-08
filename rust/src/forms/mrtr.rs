@@ -10,17 +10,14 @@ use std::{borrow::Cow, collections::BTreeMap, future::Future, pin::Pin};
 use rmcp::{
     ErrorData, RoleServer, Service,
     model::{
-        CallToolRequestParams, CallToolResult, ClientCapabilities, ClientNotification,
-        ClientRequest, CustomResult, MetaObject, ProtocolVersion, ResultType, ServerConfig,
-        ServerResult,
+        CallToolRequestParams, CallToolResult, ClientNotification, ClientRequest, CustomResult,
+        Implementation, MetaObject, ProtocolVersion, ResultType, ServerConfig, ServerResult,
     },
     service::{NotificationContext, RequestContext},
 };
 use serde_json::{Value, json};
 
-use super::{
-    ELICITATION_CAPABILITY_KEY, ELICITATION_METHOD, FormResult, OpenAIForm, supports_forms,
-};
+use super::{FormResult, OpenAIForm, required_capabilities, supports_forms, wire};
 use crate::{
     Error,
     error::{invalid, nonblank},
@@ -53,6 +50,14 @@ pub fn read_input(
     key: &str,
     form: &OpenAIForm,
 ) -> Result<FormInput, Error> {
+    let input = read_response(params, key)?;
+    if let FormInput::Response { result, .. } = &input {
+        form.validate_result(result)?;
+    }
+    Ok(input)
+}
+
+pub(super) fn read_response(params: &CallToolRequestParams, key: &str) -> Result<FormInput, Error> {
     nonblank(key, "form.input_key")?;
     match (&params.input_responses, &params.request_state) {
         (None, None) => Ok(FormInput::Initial),
@@ -61,7 +66,6 @@ pub fn read_input(
                 .get(key)
                 .ok_or_else(|| invalid(format!("inputResponses is missing form response {key}")))?;
             let result: FormResult = serde_json::from_value(value.clone())?;
-            form.validate_result(&result)?;
             Ok(FormInput::Response {
                 request_state: state.clone(),
                 result,
@@ -81,7 +85,7 @@ pub fn read_input(
 #[derive(Debug, Clone)]
 pub struct FormInputRequired {
     request_state: String,
-    input_requests: BTreeMap<String, Value>,
+    input_requests: BTreeMap<String, wire::InputRequest>,
     meta: Option<MetaObject>,
 }
 
@@ -113,18 +117,13 @@ impl FormInputRequired {
     ) -> Result<(), Error> {
         let key = key.into();
         let message = message.into();
-        nonblank(&key, "form.input_key")?;
-        nonblank(&message, "form.message")?;
+        nonblank(&key, "form.input_key").map_err(Error::configuration)?;
+        nonblank(&message, "form.message").map_err(Error::configuration)?;
         if self.input_requests.contains_key(&key) {
-            return Err(invalid(format!("duplicate form input key: {key}")));
+            return Err(invalid(format!("duplicate form input key: {key}")).configuration());
         }
-        self.input_requests.insert(
-            key,
-            json!({
-                "method": ELICITATION_METHOD,
-                "params": {"mode": "form", "message": message, "requestedSchema": form.as_json()}
-            }),
-        );
+        self.input_requests
+            .insert(key, wire::InputRequest::new(message, form));
         Ok(())
     }
 
@@ -136,14 +135,13 @@ impl FormInputRequired {
 
     /// Inspect the exact outgoing result without submitting it to a peer.
     pub fn as_json(&self) -> Value {
-        let mut value = json!({
-            "resultType": "input_required", "inputRequests": self.input_requests,
-            "requestState": self.request_state
-        });
-        if let Some(meta) = &self.meta {
-            value["_meta"] = json!(meta);
-        }
-        value
+        serde_json::to_value(wire::InputRequired {
+            result_type: ResultType::INPUT_REQUIRED,
+            input_requests: &self.input_requests,
+            request_state: &self.request_state,
+            meta: self.meta.as_ref(),
+        })
+        .expect("validated form envelope contains only JSON values")
     }
 }
 
@@ -168,6 +166,81 @@ impl From<FormInputRequired> for FormToolResponse {
     }
 }
 
+/// Select the flow for a declared form tool without consuming its request context.
+///
+/// Modern requests return `true`; ordinary legacy calls return `false`. Legacy
+/// calls carrying continuation fields are rejected before application effects.
+/// This does not validate modern capabilities: [`handle_tool_call`] performs
+/// those gates before its callback. The consumer still chooses and authorizes
+/// the tool. Do not use this as a selector for unrelated tools.
+pub fn is_mrtr_request(
+    params: &CallToolRequestParams,
+    context: &RequestContext<RoleServer>,
+) -> Result<bool, ErrorData> {
+    if context
+        .protocol_version()
+        .is_some_and(|version| version.as_str() >= "2026-07-28")
+    {
+        return Ok(true);
+    }
+    if params.input_responses.is_some() || params.request_state.is_some() {
+        return Err(ErrorData::invalid_request(
+            "MRTR form continuation requires MCP 2026-07-28 or later",
+            None,
+        ));
+    }
+    Ok(false)
+}
+
+/// Execute a modern form callback inside the consumer's own request pipeline.
+///
+/// Call after selecting and authorizing the tool. Protocol version, required
+/// request metadata and form capability are validated before the callback.
+/// Parameters and context are passed unchanged. The callback can borrow server
+/// state and owns argument validation, authorization and secure continuations.
+/// The returned lossless result includes the supplied server implementation
+/// information, preserving other metadata. Errors are returned to the consumer
+/// so it can record diagnostics together with success and input-required replies.
+/// Legacy calls are rejected; select their normal handler with [`is_mrtr_request`].
+pub async fn handle_tool_call<F, Fut>(
+    params: CallToolRequestParams,
+    context: RequestContext<RoleServer>,
+    server_info: &Implementation,
+    supported_versions: &[ProtocolVersion],
+    handler: F,
+) -> Result<ServerResult, ErrorData>
+where
+    F: FnOnce(CallToolRequestParams, RequestContext<RoleServer>) -> Fut,
+    Fut: Future<Output = Result<FormToolResponse, ErrorData>>,
+{
+    if !is_mrtr_request(&params, &context)? {
+        return Err(ErrorData::invalid_request(
+            "MRTR form handling requires MCP 2026-07-28 or later",
+            None,
+        ));
+    }
+    validate_context(&context, supported_versions)?;
+    let mut response = handler(params, context).await?;
+    let meta = match &mut response {
+        FormToolResponse::Complete(result) => {
+            result.result_type = Some(ResultType::COMPLETE);
+            &mut result.meta
+        }
+        FormToolResponse::InputRequired(result) => &mut result.meta,
+    };
+    // The consumer's implementation identity is authoritative for this key.
+    meta.get_or_insert_default().0.insert(
+        "io.modelcontextprotocol/serverInfo".into(),
+        json!(server_info),
+    );
+    match response {
+        FormToolResponse::Complete(result) => Ok(ServerResult::CallToolResult(result)),
+        FormToolResponse::InputRequired(result) => Ok(ServerResult::CustomResult(
+            CustomResult::new(result.as_json()),
+        )),
+    }
+}
+
 type HandlerFuture = Pin<Box<dyn Future<Output = Result<FormToolResponse, ErrorData>> + Send>>;
 type Handler =
     Box<dyn Fn(CallToolRequestParams, RequestContext<RoleServer>) -> HandlerFuture + Send + Sync>;
@@ -182,6 +255,10 @@ type Handler =
 /// protocol/capability before invoking them. It provides no task-result variant.
 /// Modern results include the underlying server's implementation information,
 /// preserving other result metadata.
+///
+/// This adapter intercepts registered modern calls before the inner request
+/// handler. If common controls or diagnostics live there, use [`handle_tool_call`]
+/// inside that pipeline instead, or wrap this entire adapter with your controls.
 pub struct FormService<S> {
     inner: S,
     handlers: BTreeMap<String, Handler>,
@@ -205,7 +282,7 @@ impl<S> FormService<S> {
         Fut: Future<Output = Result<FormToolResponse, ErrorData>> + Send + 'static,
     {
         let name = name.into();
-        nonblank(&name, "form.tool_name")?;
+        nonblank(&name, "form.tool_name").map_err(Error::configuration)?;
         if self.handlers.contains_key(&name) {
             return Err(Error::ToolCollision(name));
         }
@@ -225,40 +302,16 @@ impl<S: Service<RoleServer>> Service<RoleServer> for FormService<S> {
     ) -> Result<ServerResult, ErrorData> {
         if let ClientRequest::CallToolRequest(call) = &request
             && let Some(handler) = self.handlers.get(call.params.name.as_ref())
+            && is_mrtr_request(&call.params, &context)?
         {
-            if context
-                .protocol_version()
-                .is_some_and(|version| version.as_str() >= "2026-07-28")
-            {
-                validate_context(&context, &self.inner.supported_protocol_versions())?;
-                let mut response = handler(call.params.clone(), context).await?;
-                let meta = match &mut response {
-                    FormToolResponse::Complete(result) => {
-                        result.result_type = Some(ResultType::COMPLETE);
-                        &mut result.meta
-                    }
-                    FormToolResponse::InputRequired(result) => &mut result.meta,
-                };
-                // Modern MCP recommends this information on every result.
-                // The service configuration is authoritative for this name;
-                // retain all other application-supplied metadata.
-                meta.get_or_insert_default().0.insert(
-                    "io.modelcontextprotocol/serverInfo".into(),
-                    json!(self.inner.get_info().server_info),
-                );
-                return match response {
-                    FormToolResponse::Complete(result) => Ok(ServerResult::CallToolResult(result)),
-                    FormToolResponse::InputRequired(result) => Ok(ServerResult::CustomResult(
-                        CustomResult::new(result.as_json()),
-                    )),
-                };
-            }
-            if call.params.input_responses.is_some() || call.params.request_state.is_some() {
-                return Err(ErrorData::invalid_request(
-                    "MRTR form continuation requires MCP 2026-07-28 or later",
-                    None,
-                ));
-            }
+            return handle_tool_call(
+                call.params.clone(),
+                context,
+                &self.inner.get_info().server_info,
+                &self.inner.supported_protocol_versions(),
+                handler,
+            )
+            .await;
         }
         self.inner.handle_request(request, context).await
     }
@@ -310,15 +363,9 @@ fn validate_context(
         .as_ref()
         .is_some_and(supports_forms)
     {
-        let mut required = ClientCapabilities::default();
-        required.extensions = Some(
-            [(
-                ELICITATION_CAPABILITY_KEY.into(),
-                json!({"form": {}}).as_object().unwrap().clone(),
-            )]
-            .into(),
-        );
-        return Err(ErrorData::missing_required_client_capability(required));
+        return Err(ErrorData::missing_required_client_capability(
+            required_capabilities(),
+        ));
     }
     Ok(())
 }

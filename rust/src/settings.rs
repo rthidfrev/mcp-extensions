@@ -1,14 +1,20 @@
 //! Validated native settings schemas and layouts. Persistence belongs to the server.
 use std::collections::HashSet;
 
-use rmcp::model::JsonObject;
+use rmcp::model::{JsonObject, ServerCapabilities, ToolsCapability};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
     Error,
     error::{invalid, nonblank},
+    validation::{allowed, compile, validate, validate_required},
 };
+
+mod convenience;
+mod tools;
+mod wire;
+pub use tools::SettingsTools;
 
 /// Capability key identifying a same-server settings read/update pair.
 pub const SETTINGS_CAPABILITY_KEY: &str = "openai/settings";
@@ -21,6 +27,33 @@ pub struct SettingsCapability {
     pub read_tool: String,
     /// Update tool name.
     pub update_tool: String,
+}
+
+impl SettingsCapability {
+    /// Advertise an installed settings pair in modern and legacy namespaces.
+    ///
+    /// Call only after both tools are successfully installed and callable. This
+    /// description cannot inspect a custom registry or track later mutations;
+    /// the consumer must remove/update advertisements when its tools change.
+    /// Unrelated namespaces and an existing tools capability are preserved.
+    pub fn apply_capabilities(&self, capabilities: &mut ServerCapabilities) {
+        capabilities
+            .tools
+            .get_or_insert_with(ToolsCapability::default);
+        let value = serde_json::to_value(self)
+            .expect("settings capability contains only strings")
+            .as_object()
+            .expect("object")
+            .clone();
+        capabilities
+            .extensions
+            .get_or_insert_with(Default::default)
+            .insert(SETTINGS_CAPABILITY_KEY.into(), value.clone());
+        capabilities
+            .experimental
+            .get_or_insert_with(Default::default)
+            .insert(SETTINGS_CAPABILITY_KEY.into(), value);
+    }
 }
 
 /// A value control or a same-server tool button inside a settings group.
@@ -68,10 +101,21 @@ pub struct SettingsRegistration {
     patch_validator: jsonschema::Validator,
 }
 
+impl TryFrom<Value> for SettingsRegistration {
+    type Error = Error;
+    fn try_from(value: Value) -> Result<Self, Error> {
+        Self::new(value)
+    }
+}
+
 impl SettingsRegistration {
     /// Validate a JSON Schema object, using `settings.read` and `settings.update`.
     /// Nested values, schema composition, references and defaults are unsupported.
     pub fn new(schema: Value) -> Result<Self, Error> {
+        Self::validate_definition(schema).map_err(Error::configuration)
+    }
+
+    fn validate_definition(schema: Value) -> Result<Self, Error> {
         let root = schema
             .as_object()
             .ok_or_else(|| invalid("settings.schema must be an object"))?;
@@ -137,13 +181,9 @@ impl SettingsRegistration {
             }
         }
         validate_required(root, fields, "settings")?;
-        let mut complete = schema.clone();
-        complete["required"] = json!(fields.keys().collect::<Vec<_>>());
-        complete["additionalProperties"] = json!(false);
+        let complete = wire::values_schema(&schema);
         let validator = compile(&complete)?;
-        let mut patch = complete;
-        patch["required"] = json!([]);
-        patch["minProperties"] = json!(1);
+        let patch = wire::patch_schema(&schema);
         let patch_validator = compile(&patch)?;
         Ok(Self {
             capability: SettingsCapability {
@@ -165,10 +205,10 @@ impl SettingsRegistration {
     ) -> Result<Self, Error> {
         let read = read.into();
         let update = update.into();
-        nonblank(&read, "readTool")?;
-        nonblank(&update, "updateTool")?;
+        nonblank(&read, "readTool").map_err(Error::configuration)?;
+        nonblank(&update, "updateTool").map_err(Error::configuration)?;
         if read == update {
-            return Err(invalid("settings tool names must be distinct"));
+            return Err(invalid("settings tool names must be distinct").configuration());
         }
         self.capability = SettingsCapability {
             read_tool: read,
@@ -184,19 +224,20 @@ impl SettingsRegistration {
             .expect("validated properties");
         let mut seen = HashSet::new();
         for SettingsGroup::Group { title, items } in &layout {
-            nonblank(title, "layout.title")?;
+            nonblank(title, "layout.title").map_err(Error::configuration)?;
             for item in items {
                 match item {
                     SettingsLayoutItem::Property { property } => {
                         if !fields.contains_key(property) || !seen.insert(property) {
                             return Err(invalid(format!(
                                 "unknown or duplicate settings property: {property}"
-                            )));
+                            ))
+                            .configuration());
                         }
                     }
                     SettingsLayoutItem::Tool { tool, title, .. } => {
-                        nonblank(tool, "layout.tool")?;
-                        nonblank(title, "layout.tool.title")?;
+                        nonblank(tool, "layout.tool").map_err(Error::configuration)?;
+                        nonblank(title, "layout.tool.title").map_err(Error::configuration)?;
                     }
                 }
             }
@@ -223,53 +264,4 @@ impl SettingsRegistration {
             "settings.set",
         )
     }
-}
-
-pub(crate) fn allowed(object: &JsonObject, keys: &[&str], location: &str) -> Result<(), Error> {
-    if let Some(key) = object.keys().find(|k| !keys.contains(&k.as_str())) {
-        return Err(invalid(format!("unsupported keyword {location}.{key}")));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_required(
-    root: &JsonObject,
-    fields: &JsonObject,
-    location: &str,
-) -> Result<(), Error> {
-    if let Some(required) = root.get("required") {
-        let required = required
-            .as_array()
-            .ok_or_else(|| invalid(format!("{location}.required must be an array")))?;
-        let mut seen = HashSet::new();
-        for name in required {
-            let name = name
-                .as_str()
-                .ok_or_else(|| invalid("required names must be strings"))?;
-            if !fields.contains_key(name) || !seen.insert(name) {
-                return Err(invalid(format!(
-                    "unknown or duplicate required property: {name}"
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
-pub(crate) fn compile(schema: &Value) -> Result<jsonschema::Validator, Error> {
-    jsonschema::options()
-        .with_draft(jsonschema::Draft::Draft202012)
-        .should_validate_formats(true)
-        .build(schema)
-        .map_err(|e| invalid(format!("invalid schema: {e}")))
-}
-
-pub(crate) fn validate(
-    validator: &jsonschema::Validator,
-    value: &Value,
-    location: &str,
-) -> Result<(), Error> {
-    validator
-        .validate(value)
-        .map_err(|e| invalid(format!("{location}{}: {e}", e.instance_path())))
 }

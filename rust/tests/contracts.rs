@@ -1,4 +1,9 @@
+#[cfg(feature = "mcp-apps")]
+use openai_mcp_extensions::ui::{
+    APP_MIME_TYPE, app_html_resource, associate_app_resource, supports_mcp_apps,
+};
 use openai_mcp_extensions::{
+    Error,
     forms::{FormResult, OpenAIForm, PreviewTarget},
     mentions::{MentionItem, MentionResource, MentionSearchResult},
     resources::{
@@ -6,10 +11,7 @@ use openai_mcp_extensions::{
         resource_tool_call_metadata,
     },
     settings::{SettingsGroup, SettingsLayoutItem, SettingsRegistration},
-    ui::{
-        APP_MIME_TYPE, DisplayMode, Entrypoint, UiResourceMetadata, UiToolMetadata,
-        app_html_resource, associate_app_resource, supports_mcp_apps,
-    },
+    ui::{DisplayMode, Entrypoint, UiResourceMetadata, UiToolMetadata},
 };
 use rmcp::model::{MetaObject, RequestMetaObject};
 use serde_json::{Value, json};
@@ -110,6 +112,78 @@ fn unsupported_or_malformed_forms_are_rejected_before_sending() {
     }
     assert!(
         OpenAIForm::from_json(json!({"type":"object","properties":{},"required":["missing"]}))
+            .is_err()
+    );
+}
+
+#[test]
+fn titled_form_options_require_string_titles_before_construction() {
+    for option in [
+        json!({"const":"bolt"}),
+        json!({"const":"bolt","title":null}),
+        json!({"const":"bolt","title":42}),
+        json!({"const":"bolt","title":false}),
+        json!({"const":"bolt","title":[]}),
+        json!({"const":"bolt","title":{}}),
+    ] {
+        for field in [
+            json!({"type":"string","oneOf":[option]}),
+            json!({"type":"array","items":{"anyOf":[option]}}),
+            json!({"type":"string","x-openai-suggestions":[option]}),
+            json!({"type":"array","items":{"type":"string","x-openai-suggestions":[option]}}),
+        ] {
+            let error = OpenAIForm::from_json(json!({
+                "type":"object","properties":{"part":field}
+            }))
+            .unwrap_err();
+            assert!(matches!(error, Error::Configuration { .. }));
+            assert!(error.to_string().contains("option.title must be a string"));
+        }
+    }
+}
+
+#[test]
+fn titled_form_options_preserve_titles_and_optional_descriptions() {
+    for option in [
+        json!({"const":"bolt","title":"Bolt"}),
+        json!({"const":"bolt","title":"Bolt","description":"A fastener"}),
+        json!({"const":"bolt","title":""}),
+    ] {
+        for field in [
+            json!({"type":"string","oneOf":[option]}),
+            json!({"type":"array","items":{"anyOf":[option]}}),
+            json!({"type":"string","x-openai-suggestions":[option]}),
+            json!({"type":"array","items":{"type":"string","x-openai-suggestions":[option]}}),
+        ] {
+            let wire = json!({"type":"object","properties":{"part":field}});
+            let form = OpenAIForm::from_json(wire.clone()).unwrap();
+            assert_eq!(form.as_json(), &wire);
+        }
+    }
+    assert!(
+        OpenAIForm::from_json(json!({"type":"object","properties":{
+            "part":{"type":"string","oneOf":[{"const":"bolt","title":"Bolt","description":42}]}
+        }}))
+        .is_err()
+    );
+}
+
+#[test]
+fn untitled_form_enums_remain_supported() {
+    let wire = json!({"type":"object","properties":{
+        "part":{"type":"string","enum":["bolt","nut"]},
+        "parts":{"type":"array","items":{"type":"string","enum":["bolt","nut"]}}
+    },"required":["part","parts"]});
+    let form = OpenAIForm::from_json(wire.clone()).unwrap();
+    assert_eq!(form.as_json(), &wire);
+    form.validate_result(&accept(json!({"part":"bolt","parts":["nut"]})))
+        .unwrap();
+    assert!(
+        form.validate_result(&accept(json!({"part":"washer","parts":["nut"]})))
+            .is_err()
+    );
+    assert!(
+        form.validate_result(&accept(json!({"part":"bolt","parts":["washer"]})))
             .is_err()
     );
 }
@@ -238,30 +312,42 @@ fn metadata_merges_without_losing_other_namespaces() {
     );
     assert_eq!(meta.0["other"], json!({"keep":true}));
     let before = meta.clone();
-    for modes in [
-        UiResourceMetadata {
-            available_display_modes: Some(vec![DisplayMode::Pip]),
-            ..Default::default()
-        },
-        UiResourceMetadata {
-            preferred_display_mode: Some(DisplayMode::Pip),
-            ..Default::default()
-        },
+    let error = UiToolMetadata {
+        entrypoints: Some(vec![Entrypoint::File {
+            extensions: vec!["stl".into()],
+        }]),
+        ..Default::default()
+    }
+    .apply(&mut meta)
+    .unwrap_err();
+    assert!(matches!(error, Error::Configuration { .. }));
+    assert_eq!(meta, before);
+}
+
+#[test]
+fn openai_display_modes_reject_unsupported_wire_values_before_application() {
+    for mode in [DisplayMode::Inline, DisplayMode::Fullscreen] {
+        let wire = match mode {
+            DisplayMode::Inline => "inline",
+            DisplayMode::Fullscreen => "fullscreen",
+        };
+        assert_eq!(serde_json::to_value(mode).unwrap(), json!(wire));
+        assert_eq!(
+            serde_json::from_value::<DisplayMode>(json!(wire)).unwrap(),
+            mode
+        );
+    }
+    assert!(serde_json::from_value::<DisplayMode>(json!("pip")).is_err());
+    for wire in [
+        json!({"availableDisplayModes":["inline","pip"]}),
+        json!({"preferredDisplayMode":"pip"}),
     ] {
-        assert!(modes.apply(&mut meta).is_err());
-        assert_eq!(meta, before);
+        assert!(serde_json::from_value::<UiResourceMetadata>(wire).is_err());
     }
     assert!(
-        UiToolMetadata {
-            entrypoints: Some(vec![Entrypoint::File {
-                extensions: vec!["stl".into()]
-            }]),
-            ..Default::default()
-        }
-        .apply(&mut meta)
-        .is_err()
+        serde_json::from_value::<UiToolMetadata>(json!({"preferredModelDisplayMode":"pip"}))
+            .is_err()
     );
-    assert_eq!(meta, before);
 }
 
 #[test]
@@ -351,6 +437,7 @@ fn resource_previews_validate_the_spec_union_without_stripping_metadata() {
 }
 
 #[test]
+#[cfg(feature = "mcp-apps")]
 fn mcp_app_helpers_preserve_security_and_visibility_declarations() {
     let mut meta = MetaObject(
         json!({"ui":{"visibility":["app"]},"other":true})
@@ -359,12 +446,23 @@ fn mcp_app_helpers_preserve_security_and_visibility_declarations() {
             .clone(),
     );
     associate_app_resource(&mut meta, "ui://parts/viewer").unwrap();
+    let associated = meta.clone();
+    associate_app_resource(&mut meta, "ui://parts/viewer").unwrap();
+    assert_eq!(meta, associated);
     assert_eq!(
         meta.0["ui"],
         json!({"visibility":["app"],"resourceUri":"ui://parts/viewer"})
     );
     assert_eq!(meta.0["other"], true);
     let before = meta.clone();
+    // Two SDKs must not silently redirect a tool to different UI resources.
+    let error = associate_app_resource(&mut meta, "ui://parts/other").unwrap_err();
+    assert!(matches!(
+        error,
+        Error::Configuration { source }
+            if matches!(*source, Error::McpAppsMetadata(mcp_apps_server::MetadataError::Conflict { .. }))
+    ));
+    assert_eq!(meta, before);
     for uri in ["https://example.com/app", "ui://", "ui://parts/ bad"] {
         assert!(associate_app_resource(&mut meta, uri).is_err());
         assert_eq!(meta, before);
@@ -396,12 +494,28 @@ fn mcp_app_helpers_preserve_security_and_visibility_declarations() {
             json!({"extensions":{"io.modelcontextprotocol/ui":{"mimeTypes":APP_MIME_TYPE}}}),
             false,
         ),
+        (
+            json!({"extensions":{"io.modelcontextprotocol/ui":{"mimeTypes":[APP_MIME_TYPE, 1]}}}),
+            false,
+        ),
     ] {
         assert_eq!(
             supports_mcp_apps(&serde_json::from_value(capabilities).unwrap()),
             supported
         );
     }
+}
+
+#[test]
+#[cfg(feature = "mcp-apps")]
+fn app_association_rejects_conflicting_legacy_alias_without_mutation() {
+    let mut meta = MetaObject(
+        json!({"ui/resourceUri":"ui://parts/other","openai/ui":{"entrypoints":[{"type":"thread"}]}})
+            .as_object().unwrap().clone(),
+    );
+    let before = meta.clone();
+    assert!(associate_app_resource(&mut meta, "ui://parts/viewer").is_err());
+    assert_eq!(meta, before);
 }
 
 #[test]

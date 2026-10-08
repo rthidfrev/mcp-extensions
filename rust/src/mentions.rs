@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, error::nonblank};
 
+mod tool;
+pub use tool::{search_tool, search_tool_with_state};
+
 /// Name of the mention-search tool installed by the SDK.
 pub const SEARCH_MENTIONS_TOOL: &str = "search_mentions";
 

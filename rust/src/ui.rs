@@ -1,70 +1,28 @@
-//! Metadata for launching MCP Apps and choosing their display modes.
-use rmcp::model::{ClientCapabilities, Icon, MetaObject, ResourceContents};
+//! OpenAI entrypoints and display annotations for native rmcp tools and resources.
+//!
+//! The `openai/ui` profile is available without optional features. Your server
+//! owns generic MCP Apps metadata, resource serving and request authorization.
+//! Enable `mcp-apps` for checked resource associations, HTML contents and client
+//! capability inspection backed by MCP Apps Server. These helpers do not change
+//! the OpenAI annotations or require adopting its router.
+#[cfg(feature = "mcp-apps")]
+mod mcp_apps;
+#[cfg(feature = "mcp-apps")]
+pub use mcp_apps::{
+    APP_CAPABILITY_KEY, APP_MIME_TYPE, app_html_resource, associate_app_resource, supports_mcp_apps,
+};
+
+use rmcp::model::{Icon, MetaObject, ResourceContents, Tool};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::{Error, error::nonblank};
 
 /// `_meta` key for OpenAI UI annotations.
 pub const UI_META_KEY: &str = "openai/ui";
 
-/// MIME type for the HTML resource an MCP App tool references.
-pub const APP_MIME_TYPE: &str = "text/html;profile=mcp-app";
-/// Client extension capability declaring MCP Apps support.
-pub const APP_CAPABILITY_KEY: &str = "io.modelcontextprotocol/ui";
-
-/// Whether a client advertises support for HTML MCP Apps.
-/// This does not establish which OpenAI entrypoints that host implements.
-pub fn supports_mcp_apps(capabilities: &ClientCapabilities) -> bool {
-    capabilities
-        .extensions
-        .as_ref()
-        .and_then(|e| e.get(APP_CAPABILITY_KEY))
-        .and_then(|e| e.get("mimeTypes"))
-        .and_then(Value::as_array)
-        .is_some_and(|types| types.iter().any(|t| t.as_str() == Some(APP_MIME_TYPE)))
-}
-
-/// Associate a tool's metadata with an existing `ui://` resource.
-/// Preserves existing UI visibility and unrelated metadata, rejecting malformed
-/// metadata without mutation. The application must serve the referenced resource.
-pub fn associate_app_resource(meta: &mut MetaObject, uri: &str) -> Result<(), Error> {
-    validate_app_uri(uri)?;
-    let mut ui = match meta.0.get("ui") {
-        Some(Value::Object(ui)) => ui.clone(),
-        None => Map::new(),
-        Some(_) => return Err(crate::error::invalid("ui metadata must be an object")),
-    };
-    ui.insert("resourceUri".into(), json!(uri));
-    meta.0.insert("ui".into(), Value::Object(ui));
-    Ok(())
-}
-
-/// Build ordinary rmcp HTML resource contents for an MCP App.
-/// Metadata, including `ui.csp` and `openai/ui`, is preserved on these contents.
-/// This does not register a resource handler or implement a browser runtime.
-pub fn app_html_resource(
-    uri: &str,
-    html: impl Into<String>,
-    meta: MetaObject,
-) -> Result<ResourceContents, Error> {
-    validate_app_uri(uri)?;
-    Ok(ResourceContents::text(html, uri)
-        .with_mime_type(APP_MIME_TYPE)
-        .with_meta(meta))
-}
-
-fn validate_app_uri(uri: &str) -> Result<(), Error> {
-    if !uri.starts_with("ui://")
-        || fluent_uri::Uri::parse(uri).is_err()
-        || uri.len() <= "ui://".len()
-    {
-        return Err(crate::error::invalid("MCP App resource URI must use ui://"));
-    }
-    Ok(())
-}
-
-/// Display modes supported by an MCP App resource.
+/// Display modes supported by OpenAI tool and resource UI annotations.
+/// Unsupported modes such as `pip` are rejected during deserialization.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DisplayMode {
@@ -72,20 +30,10 @@ pub enum DisplayMode {
     Inline,
     /// Display in the main app area.
     Fullscreen,
-    /// Base MCP Apps picture-in-picture mode. Unsupported in OpenAI metadata;
-    /// retained for source compatibility, but rejected by `UiResourceMetadata::apply`.
-    Pip,
 }
 
-/// Display modes a model-triggered tool can prefer.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum ModelDisplayMode {
-    /// Display in the conversation.
-    Inline,
-    /// Display in the main app area.
-    Fullscreen,
-}
+/// Display modes a model-triggered tool can prefer, using the same OpenAI profile.
+pub type ModelDisplayMode = DisplayMode;
 
 /// The same-server tool invoked by a sidebar shortcut.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -153,35 +101,43 @@ pub struct UiToolMetadata {
 impl UiToolMetadata {
     /// Validate and insert under `openai/ui`, preserving all other metadata keys.
     /// Does not register the tool or verify same-server tool references.
+    /// Invalid definitions leave the original metadata unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] for invalid file extensions, blank labels
+    /// or names, missing quick-action icons, or metadata serialization failures.
     pub fn apply(&self, meta: &mut MetaObject) -> Result<(), Error> {
         for entry in self.entrypoints.iter().flatten() {
             match entry {
                 Entrypoint::File { extensions } => {
                     if extensions.iter().any(|s| !s.trim().starts_with('.')) {
-                        return Err(crate::error::invalid(
-                            "file extensions must start with a dot",
-                        ));
+                        return Err(
+                            crate::error::invalid("file extensions must start with a dot")
+                                .configuration(),
+                        );
                     }
                 }
                 Entrypoint::Global {
                     quick_action: Some(action),
                 } => {
-                    nonblank(&action.title, "quickAction.title")?;
+                    nonblank(&action.title, "quickAction.title").map_err(Error::configuration)?;
                     if action.icons.is_empty() {
-                        return Err(crate::error::invalid("quickAction.icons must not be empty"));
+                        return Err(crate::error::invalid("quickAction.icons must not be empty")
+                            .configuration());
                     }
                     let QuickActionTarget::Tool { name, .. } = &action.target;
-                    nonblank(name, "quickAction.target.name")?;
+                    nonblank(name, "quickAction.target.name").map_err(Error::configuration)?;
                 }
                 Entrypoint::Settings { search_terms } => {
                     for term in search_terms.iter().flatten() {
-                        nonblank(term, "searchTerms")?;
+                        nonblank(term, "searchTerms").map_err(Error::configuration)?;
                     }
                 }
                 _ => {}
             }
         }
-        let mut value = serde_json::to_value(self)?;
+        let mut value = serde_json::to_value(self).map_err(|e| Error::from(e).configuration())?;
         // Match the normalization used by the other SDKs.
         if let Some(entries) = value.get_mut("entrypoints").and_then(Value::as_array_mut) {
             for entry in entries {
@@ -205,32 +161,101 @@ impl UiToolMetadata {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UiResourceMetadata {
-    /// Display modes supported by the app.
+    /// OpenAI display modes supported by the app: inline and fullscreen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_display_modes: Option<Vec<DisplayMode>>,
-    /// Preferred display mode.
+    /// Preferred OpenAI display mode: inline or fullscreen.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preferred_display_mode: Option<DisplayMode>,
 }
 
 impl UiResourceMetadata {
-    /// Validate OpenAI's inline/fullscreen profile and insert under `openai/ui`.
+    /// Insert OpenAI's inline/fullscreen annotations under `openai/ui`.
     /// Preserves other metadata keys and leaves them unchanged on error. The host
     /// owns the default modes and may ignore the preferred-mode hint.
+    /// Unsupported wire modes are rejected when deserializing this type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] if the annotations cannot be serialized.
     pub fn apply(&self, meta: &mut MetaObject) -> Result<(), Error> {
-        if self.preferred_display_mode == Some(DisplayMode::Pip)
-            || self
-                .available_display_modes
-                .iter()
-                .flatten()
-                .any(|m| *m == DisplayMode::Pip)
-        {
-            return Err(crate::error::invalid(
-                "OpenAI display modes support inline and fullscreen",
-            ));
-        }
-        meta.0
-            .insert(UI_META_KEY.into(), serde_json::to_value(self)?);
+        let value = serde_json::to_value(self).map_err(|e| Error::from(e).configuration())?;
+        meta.0.insert(UI_META_KEY.into(), value);
+        Ok(())
+    }
+}
+
+/// Apply UI annotations directly to an existing native rmcp tool description.
+/// These methods only change metadata; the server still owns tool registration
+/// and resource serving.
+pub trait OpenAIUiToolExt {
+    /// Associate the tool with an existing `ui://` resource using
+    /// [`associate_app_resource`]. Preserves other metadata and tool fields.
+    /// Invalid URIs or malformed `ui` metadata leave the entire tool unchanged.
+    /// Conflicting existing resource associations also fail without mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] as described by [`associate_app_resource`].
+    /// Available with the `mcp-apps` feature.
+    #[cfg(feature = "mcp-apps")]
+    fn associate_app_resource(&mut self, uri: &str) -> Result<(), Error>;
+
+    /// Replace `openai/ui` using [`UiToolMetadata::apply`], preserving other
+    /// metadata and tool fields. Invalid annotations leave the tool unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] as described by [`UiToolMetadata::apply`].
+    fn apply_openai_ui(&mut self, metadata: &UiToolMetadata) -> Result<(), Error>;
+}
+
+impl OpenAIUiToolExt for Tool {
+    #[cfg(feature = "mcp-apps")]
+    fn associate_app_resource(&mut self, uri: &str) -> Result<(), Error> {
+        let mut meta = self.meta.clone().unwrap_or_default();
+        associate_app_resource(&mut meta, uri)?;
+        self.meta = Some(meta);
+        Ok(())
+    }
+
+    fn apply_openai_ui(&mut self, metadata: &UiToolMetadata) -> Result<(), Error> {
+        let mut meta = self.meta.clone().unwrap_or_default();
+        metadata.apply(&mut meta)?;
+        self.meta = Some(meta);
+        Ok(())
+    }
+}
+
+/// Apply OpenAI display annotations to existing native rmcp resource contents.
+pub trait OpenAIUiResourceExt {
+    /// Replace `openai/ui` using [`UiResourceMetadata::apply`]. Preserves URI,
+    /// MIME type, text/blob contents and every other metadata namespace.
+    /// Invalid annotations or an unsupported rmcp content variant leave the
+    /// entire resource content unchanged; this does not register or serve it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Configuration`] for serialization failures or an
+    /// unsupported rmcp resource content variant.
+    fn apply_openai_ui(&mut self, metadata: &UiResourceMetadata) -> Result<(), Error>;
+}
+
+impl OpenAIUiResourceExt for ResourceContents {
+    fn apply_openai_ui(&mut self, metadata: &UiResourceMetadata) -> Result<(), Error> {
+        let original = match self {
+            ResourceContents::TextResourceContents { meta, .. }
+            | ResourceContents::BlobResourceContents { meta, .. } => meta,
+            _ => {
+                return Err(
+                    crate::error::invalid("unsupported rmcp resource content variant")
+                        .configuration(),
+                );
+            }
+        };
+        let mut meta = original.clone().unwrap_or_default();
+        metadata.apply(&mut meta)?;
+        *original = Some(meta);
         Ok(())
     }
 }

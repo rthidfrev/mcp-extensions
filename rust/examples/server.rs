@@ -1,4 +1,10 @@
 //! A stdio server demonstrating MCP App declarations, settings, mentions and both form flows.
+//! Run `cargo run --example server --features mcp-apps`; the host drives the interaction.
+#[path = "support/app.rs"]
+mod app;
+
+use app::{APP_URI, PartsView};
+use mcp_apps_server::AppRouter;
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -18,10 +24,7 @@ use openai_mcp_extensions::{
     mentions::{MentionItem, MentionSearchResult},
     resources::{FileEntrypointInput, ResourceRepresentation, requested_representation},
     settings::{SettingsGroup, SettingsLayoutItem, SettingsRegistration},
-    ui::{
-        APP_MIME_TYPE, DisplayMode, Entrypoint, UiResourceMetadata, UiToolMetadata,
-        app_html_resource, associate_app_resource,
-    },
+    ui::{Entrypoint, UiToolMetadata, associate_app_resource},
 };
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
@@ -36,15 +39,16 @@ use rmcp::{
 use serde_json::json;
 use tokio::sync::Mutex;
 
-const APP_URI: &str = "ui://parts/viewer";
 const DATA_URI: &str = "parts://catalog/summary";
 const SUMMARY: &str = "Hex bolt, washer and nut";
-// Replace this static server-resource illustration with your bundled MCP App UI.
-// It does not implement browser initialization or tool-result notifications.
-const APP_HTML: &str = "<!doctype html><title>Parts Tray</title><main><h1>Parts Tray</h1><p>Hex bolt, washer and nut</p></main>";
+
+#[cfg(test)]
+use app::APP_HTML;
+#[cfg(test)]
+use mcp_apps_server::UI_MIME_TYPE as APP_MIME_TYPE;
 
 struct Server {
-    router: ToolRouter<Self>,
+    router: AppRouter<Self>,
     extensions: OpenAIExtensions,
     choice: Arc<PartChoice>,
 }
@@ -276,8 +280,11 @@ impl Server {
                 })
             },
         ));
+        let mut apps = AppRouter::from_tool_router(router);
+        apps.register_static::<PartsView>()?;
+        apps.validate()?;
         Ok(Self {
-            router,
+            router: apps,
             extensions,
             choice,
         })
@@ -290,8 +297,12 @@ impl ServerHandler for Server {
         info.server_info.name = "openai-extensions-example".into();
         info.server_info.version = env!("CARGO_PKG_VERSION").into();
         self.extensions.apply_capabilities(&mut info.capabilities);
-        info.capabilities.resources = Some(Default::default());
+        self.router.declare_capabilities(&mut info.capabilities);
         info
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.router.get_tool(name)
     }
 
     // FormService handles modern choose_part calls; this handler keeps the
@@ -305,10 +316,10 @@ impl ServerHandler for Server {
 
     async fn list_tools(
         &self,
-        _request: Option<rmcp::model::PaginatedRequestParams>,
+        request: Option<rmcp::model::PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
-        Ok(ListToolsResult::with_all_items(self.router.list_all()))
+        self.router.list_tools(request)
     }
 
     async fn call_tool(
@@ -316,22 +327,19 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        self.router
-            .call(rmcp::handler::server::tool::ToolCallContext::new(
-                self, request, context,
-            ))
-            .await
+        self.router.call_tool(self, request, context).await
     }
 
     async fn list_resources(
         &self,
-        _: Option<rmcp::model::PaginatedRequestParams>,
+        request: Option<rmcp::model::PaginatedRequestParams>,
         _: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, ErrorData> {
-        Ok(ListResourcesResult::with_all_items(vec![
-            Resource::new(APP_URI, "parts-viewer").with_mime_type(APP_MIME_TYPE),
-            Resource::new(DATA_URI, "parts-summary").with_mime_type("text/plain"),
-        ]))
+        let mut result = self.router.list_resources(request)?;
+        result
+            .resources
+            .push(Resource::new(DATA_URI, "parts-summary").with_mime_type("text/plain"));
+        Ok(result)
     }
 
     async fn read_resource(
@@ -339,26 +347,11 @@ impl ServerHandler for Server {
         request: ReadResourceRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
+        // This handler retains resource selection and can authorize before dispatch.
+        if self.router.contains_resource(&request.uri) {
+            return self.router.read_resource(self, request, context).await;
+        }
         let contents = match request.uri.as_str() {
-            APP_URI => {
-                // The host enforces CSP. This static HTML has no external assets.
-                let mut meta = MetaObject(
-                    json!({"ui":{"csp":{"connectDomains":[],"resourceDomains":[]}}})
-                        .as_object()
-                        .unwrap()
-                        .clone(),
-                );
-                UiResourceMetadata {
-                    available_display_modes: Some(vec![
-                        DisplayMode::Inline,
-                        DisplayMode::Fullscreen,
-                    ]),
-                    preferred_display_mode: Some(DisplayMode::Inline),
-                }
-                .apply(&mut meta)
-                .map_err(ErrorData::from)?;
-                app_html_resource(APP_URI, APP_HTML, meta).map_err(ErrorData::from)?
-            }
             DATA_URI => match requested_representation(&context.meta).map_err(ErrorData::from)? {
                 Some(ResourceRepresentation::Blob) => {
                     use base64::Engine;
