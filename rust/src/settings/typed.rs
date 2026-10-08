@@ -19,7 +19,7 @@ use std::{fmt, future::Future, marker::PhantomData, sync::Arc};
 /// never JSON `null`. Values are serialized and patches are deserialized; neither
 /// needs the opposite trait. If a consumer also serializes patches, it should skip
 /// absent fields.
-/// Implement both [`Model`] descriptions by hand.
+/// Implement both [`Model`] descriptions by hand or use the optional derives.
 /// The consumer decides how to authorize, merge and persist updates.
 pub trait SettingsModel: Model + Serialize {
     /// A flat update model whose optional fields correspond to the complete values.

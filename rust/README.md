@@ -14,6 +14,11 @@ explicit nulls are rejected. Numeric decoding preserves integer domains and
 rechecks floating-point constraints after rounding. See the
 [handwritten typed server](examples/typed.rs) and [model API](src/model.rs).
 
+Enable the optional `derive` feature for `Model`, `SettingsModel` and `StringEnum`
+derives. They generate the same native field contracts used by handwritten
+models. See the [derive guide](derive/README.md) and
+[derived server example](examples/derived.rs).
+
 Server-side [OpenAI MCP Extensions](../docs/spec.md) for the
 [official Rust MCP SDK, `rmcp`](https://github.com/modelcontextprotocol/rust-sdk).
 The crate adds mention search, native settings, MCP App metadata, resource input

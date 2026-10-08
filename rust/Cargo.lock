@@ -615,11 +615,21 @@ dependencies = [
  "fluent-uri",
  "jsonschema",
  "mcp-apps-server",
+ "openai-mcp-extensions-macros",
  "rmcp",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "openai-mcp-extensions-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]

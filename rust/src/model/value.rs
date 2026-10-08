@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 ///
 /// Implementations must describe their actual Serde representation. Built-ins
 /// cover primitives, string arrays and one `Option` wrapper. String enums can
-/// implement this by hand.
+/// implement this by hand or use the optional `StringEnum` derive.
 pub trait FieldType {
     /// `true` only when omission represents an optional field.
     const OPTIONAL: bool = false;

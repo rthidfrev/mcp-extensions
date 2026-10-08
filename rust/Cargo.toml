@@ -9,8 +9,13 @@ repository = "https://github.com/openai/mcp-extensions"
 readme = "README.md"
 include = ["src/**", "tests/**", "examples/**", "README.md", "LICENSE", "Cargo.toml"]
 
+[workspace]
+members = ["derive"]
+resolver = "3"
+
 [features]
 default = []
+derive = ["dep:openai-mcp-extensions-macros"]
 mcp-apps = ["dep:mcp-apps-server"]
 
 [dependencies]
@@ -22,6 +27,7 @@ thiserror = "2"
 jsonschema = { version = "0.58.5", default-features = false }
 base64 = "0.22"
 fluent-uri = { version = "0.4.1", default-features = false, features = ["alloc", "impl-error"] }
+openai-mcp-extensions-macros = { version = "=0.1.0", path = "derive", optional = true }
 
 [dev-dependencies]
 rmcp = { version = "3.5.0", default-features = false, features = ["client", "macros", "transport-io"] }
@@ -37,6 +43,11 @@ test = true
 
 [[example]]
 name = "custom_server"
+test = true
+
+[[example]]
+name = "derived"
+required-features = ["derive"]
 test = true
 
 [[example]]

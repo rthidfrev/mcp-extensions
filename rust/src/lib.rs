@@ -4,8 +4,8 @@
 //! [`rmcp::handler::server::router::tool::ToolRouter`] with [`OpenAIExtensions`].
 //! The application retains its handler, authentication, persistence and transport.
 //!
-//! No optional features are enabled by default. `mcp-apps` adds generic
-//! MCP Apps helpers in [`ui`]. OpenAI
+//! No optional features are enabled by default. `derive` adds model derives for
+//! forms/settings; `mcp-apps` adds generic MCP Apps helpers in [`ui`]. OpenAI
 //! entrypoint and display annotations remain available in every configuration.
 //! The optional integration uses the published `mcp-apps-server` alpha, pinned to
 //! `0.1.0-alpha.1`. Its author's manual host testing covers ChatGPT Desktop only;
@@ -24,6 +24,7 @@
 //! assert!(router.has_route("search_mentions"));
 //! # Ok::<(), openai_mcp_extensions::Error>(())
 //! ```
+#![cfg_attr(feature = "derive", doc = include_str!("model/derive_contracts.md"))]
 
 pub mod client;
 mod error;
@@ -41,3 +42,13 @@ pub use extensions::{ExtensionFuture, OpenAIExtensions};
 pub use model::{FieldType, Model, ModelField};
 pub use settings::SettingsModel;
 pub use ui::{OpenAIUiResourceExt, OpenAIUiToolExt};
+
+#[cfg(feature = "derive")]
+pub use openai_mcp_extensions_macros::{Model, SettingsModel, StringEnum};
+
+/// Implementation dependencies used by the optional derives.
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+    pub use serde_json;
+}

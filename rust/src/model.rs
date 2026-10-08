@@ -1,6 +1,6 @@
 //! Flat Rust model descriptions shared by typed forms, settings and optional derives.
 //!
-//! Implement [`Model`] by hand. Fields describe their actual
+//! Implement [`Model`] by hand or enable `derive`. Fields describe their actual
 //! serialized names and Rust types. This deliberately supports the extension's
 //! flat subset rather than projecting arbitrary JSON Schemas or Serde transforms.
 
