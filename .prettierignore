@@ -8,9 +8,7 @@ build/
 .local/
 rust/target/
 rust/Cargo.lock
+.test-build/
+.pytest_cache/
 pnpm-lock.yaml
 python/uv.lock
-
-# release-please owns changelog formatting.
-python/CHANGELOG.md
-typescript/CHANGELOG.md

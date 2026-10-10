@@ -10,6 +10,7 @@ export default tseslint.config(
       "**/dist/**",
       "**/node_modules/**",
       "rust/target/**",
+      "**/.test-build/**",
     ],
   },
   eslint.configs.recommended,

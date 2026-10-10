@@ -1,6 +1,9 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { RequestOptions } from "@modelcontextprotocol/sdk/shared/protocol.js";
-import type { ElicitRequestFormParams } from "@modelcontextprotocol/sdk/types.js";
+import type {
+  ElicitRequestFormParams,
+  McpServer,
+  RequestOptions,
+  ServerContext,
+} from "@modelcontextprotocol/server";
 import { z } from "zod";
 
 import {
@@ -9,7 +12,7 @@ import {
   OpenAIFormSchema,
   type OpenAIForm,
   type OpenAIFormResult,
-} from "./schema.js";
+} from "../../shared/forms/schema.js";
 
 export type OpenAIFormRequestParams = Omit<
   ElicitRequestFormParams,
@@ -19,24 +22,35 @@ export type OpenAIFormRequestParams = Omit<
   requestedSchema: OpenAIForm;
 };
 export type OpenAIElicitInput = (
+  context: ServerContext,
   params: OpenAIFormRequestParams,
   options?: RequestOptions,
 ) => Promise<OpenAIFormResult>;
 
 const OPENAI_ELICITATION_EXTENSION_ID = "openai/elicitation";
 const OPENAI_ELICITATION_METHOD = "openai/elicitation/create";
+const RequestEnvelopeSchema = z.object({
+  "io.modelcontextprotocol/protocolVersion": z.string().optional(),
+  "io.modelcontextprotocol/clientCapabilities": z.unknown().optional(),
+});
 const OpenAIFormClientCapabilitiesSchema = z.object({
   extensions: z.object({
     [OPENAI_ELICITATION_EXTENSION_ID]: z.object({ form: z.object({}) }),
   }),
 });
 
-export function createElicitInput(server: {
-  server: Pick<McpServer["server"], "request" | "getClientCapabilities">;
-}): OpenAIElicitInput {
-  return async (params, options): Promise<OpenAIFormResult> => {
+export function createElicitInput(server: McpServer): OpenAIElicitInput {
+  return async (context, params, options): Promise<OpenAIFormResult> => {
+    const envelope = RequestEnvelopeSchema.parse(context.mcpReq.envelope ?? {});
+    const protocolVersion =
+      envelope["io.modelcontextprotocol/protocolVersion"] ??
+      server.server.getNegotiatedProtocolVersion();
+    if (protocolVersion !== undefined && protocolVersion >= "2026-07-28") {
+      throw new Error("Use requestFormInput for MCP 2026-07-28 or newer");
+    }
     const capabilities = OpenAIFormClientCapabilitiesSchema.safeParse(
-      server.server.getClientCapabilities(),
+      envelope["io.modelcontextprotocol/clientCapabilities"] ??
+        server.server.getClientCapabilities(),
     );
     if (!capabilities.success) {
       throw new Error(
@@ -45,7 +59,7 @@ export function createElicitInput(server: {
     }
 
     const requestedSchema = OpenAIFormSchema.parse(params.requestedSchema);
-    const result = await server.server.request(
+    const result = await context.mcpReq.send(
       {
         method: OPENAI_ELICITATION_METHOD,
         params: { ...params, requestedSchema },
