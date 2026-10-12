@@ -1,6 +1,6 @@
 [package]
 name = "openai-mcp-extensions"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 description = "OpenAI MCP Extensions for Rust servers built with rmcp"
@@ -27,7 +27,7 @@ thiserror = "2"
 jsonschema = { version = "0.58.5", default-features = false }
 base64 = "0.22"
 fluent-uri = { version = "0.4.1", default-features = false, features = ["alloc", "impl-error"] }
-openai-mcp-extensions-macros = { version = "=0.1.0", path = "derive", optional = true }
+openai-mcp-extensions-macros = { version = "=0.1.0-alpha.1", path = "derive", optional = true }
 
 [dev-dependencies]
 rmcp = { version = "3.5.0", default-features = false, features = ["client", "macros", "transport-io"] }

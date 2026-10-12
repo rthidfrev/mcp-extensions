@@ -218,7 +218,7 @@ async fn modern_forms_preserve_wire_and_validate_before_effects() {
         assert_eq!(initial["result"]["resultType"], "input_required");
         assert_eq!(initial["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "inner-service");
         assert_eq!(initial["result"]["_meta"]["example/result"], json!({"value":true}));
-        assert_eq!(initial["result"]["inputRequests"]["answer"], json!({"method":"openai/elicitation/create","params":{"mode":"form","message":"Choose a color","requestedSchema":form().as_json()}}));
+        assert_eq!(initial["result"]["inputRequests"]["answer"], json!({"method":"elicitation/create","params":{"mode":"form","message":"Choose a color","requestedSchema":{"type":"object","properties":{}},"_meta":{"openai/elicitation":{"requestedSchema":form().as_json()}}}}));
         assert_eq!(effects.writes.load(Ordering::SeqCst), 0);
         let state = initial["result"]["requestState"].clone();
         let mut id = 6;
@@ -273,21 +273,29 @@ async fn modern_request_gates_run_before_the_callback() {
         let mut rpc = Rpc::new(client_io);
         rpc.modern(1, "server/discover", json!({})).await;
         let server = server.await.unwrap().unwrap();
-        let mut without_capability = meta();
-        without_capability["io.modelcontextprotocol/clientCapabilities"] = json!({});
-        let rejected = rpc
-            .request(
-                2,
-                "tools/call",
-                json!({"name":"form","_meta":without_capability}),
-            )
-            .await;
-        assert_eq!(rejected["error"]["code"], -32021);
-        assert_eq!(
-            rejected["error"]["data"]["requiredCapabilities"]["extensions"]["openai/elicitation"],
-            json!({"form":{}})
-        );
-        let mut id = 3;
+        let mut id = 2;
+        for capabilities in [
+            json!({}),
+            json!({"elicitation":{"form":{}}}),
+            json!({"extensions":{"openai/elicitation":{"form":{}}}}),
+            json!({"elicitation":{"form":{}},"extensions":{"openai/elicitation":{"form":true}}}),
+        ] {
+            let mut metadata = meta();
+            metadata["io.modelcontextprotocol/clientCapabilities"] = capabilities;
+            let rejected = rpc
+                .request(id, "tools/call", json!({"name":"form","_meta":metadata}))
+                .await;
+            assert_eq!(rejected["error"]["code"], -32021);
+            assert_eq!(
+                rejected["error"]["data"]["requiredCapabilities"],
+                json!({
+                    "elicitation":{"form":{}},
+                    "extensions":{"openai/elicitation":{"form":{}}}
+                })
+            );
+            assert_eq!(effects.calls.load(Ordering::SeqCst), 0);
+            id += 1;
+        }
         for key in [
             "io.modelcontextprotocol/protocolVersion",
             "io.modelcontextprotocol/clientCapabilities",
@@ -374,7 +382,7 @@ fn multiple_form_keys_and_result_metadata_are_lossless() {
     let value = required.as_json();
     assert_eq!(value["_meta"], json!({"example/keep":{"value":true}}));
     assert_eq!(
-        value["inputRequests"]["second"]["params"]["requestedSchema"],
+        value["inputRequests"]["second"]["params"]["_meta"]["openai/elicitation"]["requestedSchema"],
         *form.as_json()
     );
     let params: CallToolRequestParams = serde_json::from_value(json!({"name":"form","requestState":"opaque state","inputResponses":{"first":{"action":"accept","content":{"selection":"blue"}},"second":{"action":"cancel"}}})).unwrap();

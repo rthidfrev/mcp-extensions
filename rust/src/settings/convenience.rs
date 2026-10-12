@@ -10,13 +10,13 @@ impl SettingsLayoutItem {
         }
     }
 
-    /// Describe a same-server tool button invoked with `{}`, without a description.
-    /// [`super::SettingsRegistration::with_layout`] validates the tool name and
-    /// title. The application must register and authorize the referenced tool.
-    pub fn tool(tool: impl Into<String>, title: impl Into<String>) -> Self {
+    /// Reference a same-server tool invoked with `{}`. Its declaration supplies
+    /// the displayed label. [`super::SettingsRegistration::with_layout`] validates
+    /// the name; the application must register and authorize the referenced tool.
+    pub fn tool(tool: impl Into<String>) -> Self {
         Self::Tool {
             tool: tool.into(),
-            title: title.into(),
+            title: None,
             description: None,
         }
     }

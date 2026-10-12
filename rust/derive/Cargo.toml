@@ -1,6 +1,6 @@
 [package]
 name = "openai-mcp-extensions-macros"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Optional flat-model derives for OpenAI MCP Extensions"

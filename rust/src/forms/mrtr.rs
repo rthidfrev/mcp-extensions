@@ -17,7 +17,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 
-use super::{FormResult, OpenAIForm, required_capabilities, supports_forms, wire};
+use super::{FormResult, OpenAIForm, supports_forms, wire};
 use crate::{
     Error,
     error::{invalid, nonblank},
@@ -195,7 +195,8 @@ pub fn is_mrtr_request(
 /// Execute a modern form callback inside the consumer's own request pipeline.
 ///
 /// Call after selecting and authorizing the tool. Protocol version, required
-/// request metadata and form capability are validated before the callback.
+/// request metadata and both core and OpenAI form capabilities are validated
+/// before the callback.
 /// Parameters and context are passed unchanged. The callback can borrow server
 /// state and owns argument validation, authorization and secure continuations.
 /// The returned lossless result includes the supplied server implementation
@@ -252,7 +253,8 @@ type Handler =
 /// receive the original parameters/context, including arguments, state and the
 /// cancellation token. They must authorize the caller and validate arguments.
 /// The adapter requires complete modern per-request metadata and validates the
-/// protocol/capability before invoking them. It provides no task-result variant.
+/// protocol and both core/OpenAI form capabilities before invoking them.
+/// It provides no task-result variant.
 /// Modern results include the underlying server's implementation information,
 /// preserving other result metadata.
 ///
@@ -361,10 +363,20 @@ fn validate_context(
     if !context
         .client_capabilities()
         .as_ref()
-        .is_some_and(supports_forms)
+        .is_some_and(|capabilities| {
+            supports_forms(capabilities)
+                && capabilities
+                    .elicitation
+                    .as_ref()
+                    .is_some_and(|elicitation| elicitation.form.is_some())
+        })
     {
         return Err(ErrorData::missing_required_client_capability(
-            required_capabilities(),
+            serde_json::from_value(json!({
+                "elicitation":{"form":{}},
+                "extensions":{"openai/elicitation":{"form":{}}}
+            }))
+            .expect("valid form capabilities"),
         ));
     }
     Ok(())

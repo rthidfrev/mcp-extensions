@@ -176,6 +176,14 @@ async fn discovery_and_settings_work_over_a_real_mcp_transport() {
             caps["extensions"]["openai/settings"]
         );
         assert_eq!(caps["extensions"]["example/other"], json!({"keep":true}));
+        assert_eq!(
+            caps["extensions"]["openai/mentions"],
+            json!({"searchTool":"search_mentions"})
+        );
+        assert_eq!(
+            caps["experimental"]["openai/mentions"],
+            caps["extensions"]["openai/mentions"]
+        );
         let tools = client.list_all_tools().await.unwrap();
         let mentions = tools.iter().find(|t| t.name == "search_mentions").unwrap();
         assert_eq!(
@@ -372,7 +380,14 @@ fn collisions_do_not_overwrite_routes_or_half_register_settings() {
     assert_eq!(router.list_all().len(), 1);
     let mut caps = rmcp::model::ServerCapabilities::default();
     extensions.apply_capabilities(&mut caps);
-    assert!(caps.extensions.is_none());
+    assert_eq!(
+        serde_json::to_value(&caps).unwrap()["extensions"],
+        json!({"openai/mentions":{"searchTool":"search_mentions"}})
+    );
+    assert_eq!(
+        serde_json::to_value(&caps).unwrap()["experimental"],
+        json!({"openai/mentions":{"searchTool":"search_mentions"}})
+    );
     assert!(!forms::supports_forms(&ClientCapabilities::default()));
 }
 

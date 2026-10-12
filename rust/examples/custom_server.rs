@@ -178,6 +178,7 @@ impl ServerHandler for Server {
         // Both settings routes are already installed. Construction alone would
         // not justify advertising their capability.
         self.settings.apply_capabilities(&mut info.capabilities);
+        mentions::apply_capabilities(&mut info.capabilities);
         info
     }
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -271,10 +272,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/wire.rs"]
+mod wire;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    #[path = "../../tests/support/wire.rs"]
-    mod wire;
 
     #[tokio::test]
     async fn custom_example_serves_tools_and_forms_on_both_protocols() {

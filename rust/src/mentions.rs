@@ -1,5 +1,5 @@
 //! Composer mention search, exposed as an ordinary read-only MCP tool.
-use rmcp::model::{Icon, Resource};
+use rmcp::model::{Icon, Resource, ServerCapabilities, ToolsCapability};
 use serde::{Deserialize, Serialize};
 
 use crate::{Error, error::nonblank};
@@ -9,6 +9,32 @@ pub use tool::{search_tool, search_tool_with_state};
 
 /// Name of the mention-search tool installed by the SDK.
 pub const SEARCH_MENTIONS_TOOL: &str = "search_mentions";
+
+/// Capability key identifying the mention-search tool.
+pub const MENTIONS_CAPABILITY_KEY: &str = "openai/mentions";
+
+/// Advertise the SDK's mention tool after installing it in your registry.
+///
+/// Modern and legacy capability maps preserve unrelated namespaces and an existing
+/// tools capability. Keep this advertisement consistent with the live registry
+/// if the route is later disabled or removed.
+pub fn apply_capabilities(capabilities: &mut ServerCapabilities) {
+    capabilities
+        .tools
+        .get_or_insert_with(ToolsCapability::default);
+    let value = serde_json::json!({"searchTool": SEARCH_MENTIONS_TOOL})
+        .as_object()
+        .expect("object")
+        .clone();
+    capabilities
+        .extensions
+        .get_or_insert_with(Default::default)
+        .insert(MENTIONS_CAPABILITY_KEY.into(), value.clone());
+    capabilities
+        .experimental
+        .get_or_insert_with(Default::default)
+        .insert(MENTIONS_CAPABILITY_KEY.into(), value);
+}
 
 /// Mention search input. An empty query is valid.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

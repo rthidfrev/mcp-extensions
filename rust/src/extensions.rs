@@ -28,6 +28,7 @@ pub type ExtensionFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ErrorDat
 #[derive(Debug, Default)]
 pub struct OpenAIExtensions {
     settings: Option<SettingsCapability>,
+    has_mentions: bool,
     has_tools: bool,
 }
 
@@ -79,6 +80,7 @@ impl OpenAIExtensions {
     {
         ensure_available(router, SEARCH_MENTIONS_TOOL)?;
         router.add_route(mentions::search_tool_with_state(handler));
+        self.has_mentions = true;
         self.has_tools = true;
         Ok(())
     }
@@ -211,8 +213,8 @@ impl OpenAIExtensions {
         Ok(())
     }
 
-    /// Advertise successfully installed tools/settings, preserving unrelated namespaces.
-    /// Settings use both modern `extensions` and legacy `experimental` maps.
+    /// Advertise successfully installed tools, mentions and settings, preserving
+    /// unrelated namespaces in modern `extensions` and legacy `experimental` maps.
     /// Configure before serving; this snapshot cannot observe later external route
     /// removal, disabling or replacement. Keep it consistent with your live registry.
     pub fn apply_capabilities(&self, capabilities: &mut ServerCapabilities) {
@@ -221,6 +223,9 @@ impl OpenAIExtensions {
         }
         if let Some(settings) = &self.settings {
             settings.apply_capabilities(capabilities);
+        }
+        if self.has_mentions {
+            mentions::apply_capabilities(capabilities);
         }
     }
 }

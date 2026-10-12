@@ -184,7 +184,7 @@ impl Server {
                     },
                     SettingsLayoutItem::Tool {
                         tool: "view_parts".into(),
-                        title: "Browse parts".into(),
+                        title: None,
                         description: None,
                     },
                 ],
@@ -429,7 +429,7 @@ mod tests {
             let server = server.await.unwrap().unwrap();
             let initial = client.modern(2, "tools/call", json!({"name":"choose_part","arguments":{}})).await;
             assert_eq!(initial["result"]["resultType"], "input_required");
-            assert_eq!(initial["result"]["inputRequests"]["answer"]["method"], "openai/elicitation/create");
+            assert_eq!(initial["result"]["inputRequests"]["answer"]["method"], "elicitation/create");
             let retry = json!({"name":"choose_part","arguments":{},"requestState":initial["result"]["requestState"],"inputResponses":{"answer":{"action":"accept","content":{"part":"bolt"}}}});
             let complete = client.modern(3,"tools/call",retry.clone()).await;
             assert_eq!(complete["result"]["resultType"], "complete");

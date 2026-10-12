@@ -149,6 +149,7 @@ impl Server {
                 tools.insert(route.name().to_owned(), route);
             }
             capability.apply_capabilities(&mut info.capabilities);
+            mentions::apply_capabilities(&mut info.capabilities);
             Registry::Custom(tools)
         } else {
             let mut router = ToolRouter::new();

@@ -225,8 +225,9 @@ fn form_envelopes_preserve_rich_schema_state_and_optional_metadata_exactly() {
     let result = FormInputRequired::new("", "answer", "Choose a file", &form).unwrap();
     let expected = json!({
         "resultType":"input_required","requestState":"","inputRequests":{
-            "answer":{"method":"openai/elicitation/create","params":{
-                "mode":"form","message":"Choose a file","requestedSchema":schema
+            "answer":{"method":"elicitation/create","params":{
+                "mode":"form","message":"Choose a file","requestedSchema":{"type":"object","properties":{}},
+                "_meta":{"openai/elicitation":{"requestedSchema":schema}}
             }}
         }
     });
@@ -382,7 +383,7 @@ async fn settings_wire_and_error_routes_preserve_callback_boundaries() {
                 )
                 .await;
             let mut expected = json!({"schema":settings_schema(),"values":{"count":7}});
-            if let Some(layout) = layout {
+            if let Some(layout) = &layout {
                 expected["layout"] = json!(layout);
             }
             assert_eq!(read["result"]["structuredContent"], expected);
@@ -398,6 +399,12 @@ async fn settings_wire_and_error_routes_preserve_callback_boundaries() {
                     .unwrap()
                     .is_valid(&expected)
             );
+
+            // Layout affects only the read envelope, not update validation.
+            if layout.is_none() {
+                server.cancel().await.unwrap();
+                continue;
+            }
 
             for (id, args, expected_code) in [
                 (

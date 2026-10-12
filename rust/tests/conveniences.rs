@@ -189,7 +189,7 @@ fn settings_layout_constructors_preserve_order_and_registration_validation() {
         "Display",
         [
             SettingsLayoutItem::property("display/show-grid"),
-            SettingsLayoutItem::tool("view_parts", "Browse parts"),
+            SettingsLayoutItem::tool("view_parts"),
             SettingsLayoutItem::property("units"),
         ],
     );
@@ -197,11 +197,23 @@ fn settings_layout_constructors_preserve_order_and_registration_validation() {
         serde_json::to_value(&group).unwrap(),
         json!({"kind":"group","title":"Display","items":[
             {"kind":"property","property":"display/show-grid"},
-            {"kind":"tool","tool":"view_parts","title":"Browse parts"},
+            {"kind":"tool","tool":"view_parts"},
             {"kind":"property","property":"units"}
         ]})
     );
     settings().with_layout(vec![group]).unwrap();
+    // Omitted labels follow the current protocol; legacy labels remain readable
+    // and are serialized unchanged for callers migrating existing layouts.
+    for value in [
+        json!({"kind":"tool","tool":"view_parts"}),
+        json!({"kind":"tool","tool":"view_parts","title":"Legacy label"}),
+    ] {
+        let item: SettingsLayoutItem = serde_json::from_value(value.clone()).unwrap();
+        settings()
+            .with_layout(vec![SettingsGroup::new("Display", [item.clone()])])
+            .unwrap();
+        assert_eq!(serde_json::to_value(item).unwrap(), value);
+    }
     for layout in [
         vec![SettingsGroup::new(
             "Display",
@@ -214,11 +226,15 @@ fn settings_layout_constructors_preserve_order_and_registration_validation() {
         vec![SettingsGroup::new(" ", [])],
         vec![SettingsGroup::new(
             "Display",
-            [SettingsLayoutItem::tool(" ", "Browse parts")],
+            [SettingsLayoutItem::tool(" ")],
         )],
         vec![SettingsGroup::new(
             "Display",
-            [SettingsLayoutItem::tool("view_parts", " ")],
+            [SettingsLayoutItem::Tool {
+                tool: "view_parts".into(),
+                title: Some(" ".into()),
+                description: None,
+            }],
         )],
     ] {
         assert!(settings().with_layout(layout).is_err());

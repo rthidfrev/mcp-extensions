@@ -6,7 +6,7 @@ pub fn meta() -> Value {
     json!({
         "io.modelcontextprotocol/protocolVersion":"2026-07-28",
         "io.modelcontextprotocol/clientInfo":{"name":"wire-host","version":"1"},
-        "io.modelcontextprotocol/clientCapabilities":{"extensions":{"openai/elicitation":{"form":{}}}},
+        "io.modelcontextprotocol/clientCapabilities":{"elicitation":{"form":{}},"extensions":{"openai/elicitation":{"form":{}}}},
         "test/keep":{"trace":"original context"}
     })
 }

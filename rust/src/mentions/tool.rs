@@ -18,6 +18,7 @@ use std::{future::Future, sync::Arc};
 /// its own checks. No macros or ToolRouter are required. Empty queries are valid;
 /// invalid input produces invalid-params errors, invalid results internal errors.
 /// Construction neither changes a registry nor advertises server capabilities.
+/// After installing the route, call [`super::apply_capabilities`].
 /// The callback owns authorization and receives the unchanged request context.
 pub fn search_tool<S, F, Fut>(handler: F) -> ToolRoute<S>
 where

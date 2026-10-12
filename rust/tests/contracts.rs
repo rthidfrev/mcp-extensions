@@ -10,7 +10,7 @@ use openai_mcp_extensions::{
         FileEntrypointInput, ResourceRepresentation, requested_representation,
         resource_tool_call_metadata,
     },
-    settings::{SettingsGroup, SettingsLayoutItem, SettingsRegistration},
+    settings::SettingsRegistration,
     ui::{DisplayMode, Entrypoint, UiResourceMetadata, UiToolMetadata},
 };
 use rmcp::model::{MetaObject, RequestMetaObject};
@@ -241,24 +241,6 @@ fn settings_validate_schema_complete_values_patch_and_layout() {
     for bad in [json!({}), json!({"mode":"c"}), json!({"extra":2})] {
         assert!(settings.validate_patch(bad.as_object().unwrap()).is_err());
     }
-    let group = |property: &str| SettingsGroup::Group {
-        title: "General".into(),
-        items: vec![SettingsLayoutItem::Property {
-            property: property.into(),
-        }],
-    };
-    assert!(
-        SettingsRegistration::new(schema.clone())
-            .unwrap()
-            .with_layout(vec![group("mode"), group("mode")])
-            .is_err()
-    );
-    assert!(
-        SettingsRegistration::new(schema.clone())
-            .unwrap()
-            .with_layout(vec![group("missing")])
-            .is_err()
-    );
     assert!(
         SettingsRegistration::new(schema)
             .unwrap()

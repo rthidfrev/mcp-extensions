@@ -1,5 +1,7 @@
 # OpenAI MCP Extensions derives
 
+Version `0.1.0-alpha.1` is experimental and unpublished; its API may change.
+
 Optional procedural macros for the [Rust server SDK](../README.md#using-the-sdk).
 Enable the SDK's `derive` feature and import its reexported `Model`, `SettingsModel`
 and `StringEnum` derives. The helper generates ordinary native model descriptions;

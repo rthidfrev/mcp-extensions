@@ -302,7 +302,7 @@ fn rich_runtime_annotations_preserve_resource_metadata_and_membership() {
         .unwrap()
         .as_json();
     assert_eq!(
-        request["inputRequests"]["answer"]["params"]["requestedSchema"],
+        request["inputRequests"]["answer"]["params"]["_meta"]["openai/elicitation"]["requestedSchema"],
         *form.as_json()
     );
 }

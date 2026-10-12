@@ -71,8 +71,10 @@ pub enum SettingsLayoutItem {
     Tool {
         /// Tool name.
         tool: String,
-        /// Visible label.
-        title: String,
+        /// Deprecated legacy label, ignored by hosts. Use the referenced tool's
+        /// `title`, `annotations.title` or `name` for its displayed label.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
         /// Optional description.
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -239,7 +241,9 @@ impl SettingsRegistration {
                     }
                     SettingsLayoutItem::Tool { tool, title, .. } => {
                         nonblank(tool, "layout.tool").map_err(Error::configuration)?;
-                        nonblank(title, "layout.tool.title").map_err(Error::configuration)?;
+                        if let Some(title) = title {
+                            nonblank(title, "layout.tool.title").map_err(Error::configuration)?;
+                        }
                     }
                 }
             }

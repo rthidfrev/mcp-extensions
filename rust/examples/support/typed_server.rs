@@ -460,7 +460,7 @@ mod tests {
             let result = if modern {
                 let initial = rpc.modern(id, "tools/call", json!({"name":FORM_TOOL,"arguments":{}})).await;
                 assert_eq!(initial["result"]["resultType"], "input_required");
-                assert_eq!(initial["result"]["inputRequests"]["answer"]["params"]["requestedSchema"],
+                assert_eq!(initial["result"]["inputRequests"]["answer"]["params"]["_meta"]["openai/elicitation"]["requestedSchema"],
                     expected_schema);
                 rpc.modern(id + 1, "tools/call", json!({
                     "name":FORM_TOOL,"arguments":{},"requestState":initial["result"]["requestState"],

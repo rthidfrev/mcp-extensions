@@ -5,7 +5,7 @@ use rmcp::model::{MetaObject, ResultType};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{ELICITATION_METHOD, OpenAIForm};
+use super::OpenAIForm;
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct PreviewMetadata<T> {
@@ -39,14 +39,29 @@ impl RequestParams {
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct InputRequest {
     method: &'static str,
-    params: RequestParams,
+    params: ModernRequestParams,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModernRequestParams {
+    mode: Mode,
+    message: String,
+    requested_schema: Value,
+    #[serde(rename = "_meta")]
+    meta: Value,
 }
 
 impl InputRequest {
     pub(super) fn new(message: String, form: &OpenAIForm) -> Self {
         Self {
-            method: ELICITATION_METHOD,
-            params: RequestParams::new(message, form),
+            method: "elicitation/create",
+            params: ModernRequestParams {
+                mode: Mode::Form,
+                message,
+                requested_schema: serde_json::json!({"type":"object","properties":{}}),
+                meta: serde_json::json!({"openai/elicitation":{"requestedSchema":form.as_json()}}),
+            },
         }
     }
 }

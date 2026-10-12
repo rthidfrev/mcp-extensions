@@ -19,7 +19,8 @@ this crate provides the server APIs, not that browser runtime.
 ## Installation
 
 Requires **Rust 1.88+** and **rmcp 3.5**. The crate is available from this checkout
-and has not been published to crates.io.
+and has not been published to crates.io. Version `0.1.0-alpha.1` is experimental;
+its API may change while protocol and host compatibility are being validated.
 
 Add a path dependency to your server's `Cargo.toml`:
 
@@ -159,7 +160,9 @@ async fn execute<S>(
 Check both settings names, including disabled or reserved names, before
 installing either route. Only then apply the returned `SettingsCapability` to
 your server capabilities. Your registry owns atomic installation and subsequent
-capability consistency. The ToolRouter helpers perform that preflight for you.
+capability consistency. After installing the standalone mention route, call
+`mentions::apply_capabilities` as well. The ToolRouter helpers perform that
+preflight and capability tracking for you.
 
 See the [custom server](examples/custom_server.rs) for complete dispatch,
 request checks and form handling. Both integration modes use the same SDK
@@ -178,14 +181,16 @@ validation and execution.
 | Launch that interface globally, in a thread or for a file | [Entrypoints](#entrypoints)                 |
 | Read host file hints or choose text/blob resource content | [Resources and files](#resources-and-files) |
 | Read session, user, locale or location metadata           | [Client context](#client-context)           |
-| Introduce a plugin on first use                           | [Onboarding](#onboarding)                   |
 | Inspect a failure's location and cause                    | [Errors](#errors)                           |
 
 ### Mentions
 
 Register `search_mentions` so the host can search resources for its `@` picker.
 The callback receives the query and request context, and returns matching items.
-An empty query is valid.
+An empty query is valid. After successful registration, `apply_capabilities`
+advertises `openai/mentions` with `searchTool: "search_mentions"` in both the
+modern `extensions` and legacy `experimental` maps. The tool retains its legacy
+mention metadata for hosts using tool-based discovery.
 
 ```rust
 use openai_mcp_extensions::{
@@ -367,6 +372,10 @@ and schema defaults.
 [SettingsRegistration](src/settings.rs) ·
 [SettingsModel derive guide](derive/README.md#complete-settings-and-partial-updates).
 
+Tool layout entries need only the tool name. Their optional legacy `title` is
+deprecated and ignored by hosts; set the referenced MCP tool's `title` instead.
+`SettingsLayoutItem::tool("view_parts")` creates an entry without that legacy field.
+
 ### Forms
 
 Build a form definition, then use the request flow supported by the client's MCP
@@ -475,7 +484,12 @@ async fn ask(
 ```
 
 For **modern input**, use `mrtr::is_mrtr_request` to select the modern handler,
-then `mrtr::handle_tool_call` inside your server's request pipeline. In its callback:
+then `mrtr::handle_tool_call` inside your server's request pipeline. Each modern
+request must advertise both `elicitation.form: {}` and
+`extensions["openai/elicitation"].form: {}`. These gates run before the callback.
+The SDK embeds `elicitation/create` in `inputRequests`, with an empty core object
+schema and the rich schema in `params._meta["openai/elicitation"].requestedSchema`.
+In its callback:
 
 1. Read `form.read_input(&params, "answer")`.
 2. On `Initial`, save continuation state and return `FormInputRequired` built
@@ -821,24 +835,6 @@ authorization data. Use `openai_client()` when you deliberately want all known
 fields to pass strict validation together.
 
 **API source:** [client metadata and context accessors](src/client.rs).
-
-### Onboarding
-
-Onboarding is a plugin-manifest convention, independent of the server language.
-Point `onboardingSkill` to a skill included in the plugin archive:
-
-```json
-{
-  "extensions": {
-    "com.openai": {
-      "onboardingSkill": "skills/onboarding/SKILL.md"
-    }
-  }
-}
-```
-
-No Rust handler is needed. See the [Bits & Bolts onboarding example](../plugins/bits-and-bolts/skills/onboarding/SKILL.md)
-and [specification](../docs/spec.md#plugin-onboarding).
 
 ### Errors
 
