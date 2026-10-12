@@ -911,9 +911,12 @@ cargo doc --locked --workspace --all-features --no-deps
 ```
 
 Set `RUSTDOCFLAGS="-D warnings"` for a strict documentation build. CI includes
-Linux, Windows and the declared minimum Rust version. Core and combined-feature
-tests exercise behavior; the independent feature builds detect accidental
-coupling. The two app examples share protocol assertions for capabilities, tool
+Linux, Windows and the declared minimum Rust version. The reusable
+[Rust workflow](../.github/workflows/rust.yml) runs alone on pushes to
+`feat/rust-sdk`; the main CI calls it alongside existing repository checks on
+pull requests and pushes to `main`. The Rust workflow performs no publication.
+Core and combined-feature tests exercise behavior; the independent feature builds
+detect accidental coupling. The two app examples share protocol assertions for capabilities, tool
 associations, resource contents and ordinary tool results. These in-memory
 exchanges do not establish host UI rendering or permissions.
 
@@ -936,7 +939,8 @@ SDK's own matching macro package until it is published; MCP Apps Server resolves
 from crates.io. `--allow-dirty` permits checking uncommitted changes and does not
 publish anything. Review the package file lists before a release.
 
-CI also rebuilds the archived SDK against the archived SDK macros. Publish
+CI also extracts both archives outside the source workspace and rebuilds the
+archived SDK against the archived SDK macros. Publish
 `openai-mcp-extensions-macros` before `openai-mcp-extensions`; the external MCP
 Apps runtime and its optional macros are already available from crates.io.
 

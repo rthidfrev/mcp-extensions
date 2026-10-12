@@ -1,0 +1,81 @@
+name: Rust
+
+on:
+  workflow_call:
+  push:
+    branches: [feat/rust-sdk]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }}, ${{ matrix.toolchain }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            toolchain: stable
+          - os: windows-latest
+            toolchain: stable
+          - os: ubuntu-latest
+            toolchain: "1.88.0"
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt --component clippy
+      - name: Formatting
+        run: cargo +${{ matrix.toolchain }} fmt --all --check
+      - name: Lint
+        run: cargo +${{ matrix.toolchain }} clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Lint core API
+        run: cargo +${{ matrix.toolchain }} clippy --locked -p openai-mcp-extensions --no-default-features --all-targets -- -D warnings
+      - name: Tests and documentation examples
+        run: cargo +${{ matrix.toolchain }} test --locked --workspace --all-features
+      - name: Core API without optional SDK dependencies
+        run: cargo +${{ matrix.toolchain }} test --locked -p openai-mcp-extensions --no-default-features
+      - name: Independent optional features
+        run: |
+          cargo +${{ matrix.toolchain }} check --locked -p openai-mcp-extensions --all-targets --no-default-features --features derive
+          cargo +${{ matrix.toolchain }} check --locked -p openai-mcp-extensions --all-targets --no-default-features --features mcp-apps
+      - name: Core documentation
+        run: cargo +${{ matrix.toolchain }} doc --locked -p openai-mcp-extensions --no-default-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Documentation
+        run: cargo +${{ matrix.toolchain }} doc --locked --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - name: Verify crate archives
+        run: cargo +${{ matrix.toolchain }} package --locked --workspace --all-features --allow-dirty --config 'patch.crates-io.openai-mcp-extensions-macros.path="derive"'
+      - name: Verify archived server against archived macros
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+        run: |
+          server=(target/package/openai-mcp-extensions-[0-9]*.crate)
+          macros=(target/package/openai-mcp-extensions-macros-[0-9]*.crate)
+          test "${#server[@]}" -eq 1 && test -f "${server[0]}"
+          test "${#macros[@]}" -eq 1 && test -f "${macros[0]}"
+          # Keep archive verification independent of the source workspace.
+          archive_dir="$RUNNER_TEMP/rust-crate-check"
+          if [ "$RUNNER_OS" = Windows ]; then
+            archive_dir="$(cygpath -m "$archive_dir")"
+          fi
+          mkdir -p "$archive_dir"
+          tar -xzf "${server[0]}" -C "$archive_dir"
+          tar -xzf "${macros[0]}" -C "$archive_dir"
+          server_dir="$archive_dir/$(basename "${server[0]}" .crate)"
+          macros_dir="$archive_dir/$(basename "${macros[0]}" .crate)"
+          cargo +${{ matrix.toolchain }} check --locked --lib --all-features \
+            --manifest-path "$server_dir/Cargo.toml" \
+            --config "patch.crates-io.openai-mcp-extensions-macros.path=\"$macros_dir\""
